@@ -28,7 +28,7 @@ export default function Home() {
           >
             <h2 className="text-2xl font-semibold">I’m a Provider</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Review questions & approve replies
+              Monitor patients, review questions & approve replies
             </p>
           </Link>
         </div>
