@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   MessageCircle,
@@ -12,16 +12,17 @@ import {
   History as HistoryIcon,
   UserSquare2
 } from "lucide-react";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 
 type ChatMode = "GENERAL" | "MOOD" | "BONDING" | "HEALTH";
 
 type Session = {
   id: number;
   motherId: number;
-  date: string;      // ISO
+  date: string;
   seqInDay: number;
   mode: ChatMode;
-  createdAt: string; // ISO
+  createdAt: string;
 };
 
 type Msg = {
@@ -32,11 +33,10 @@ type Msg = {
   oversight: "NONE" | "AWAITING_PROVIDER" | "APPROVED" | "MODIFIED";
   relayTicketId?: number | null;
   meta?: any;
-  createdAt: string; // ISO
+  createdAt: string;
 };
 
 export default function MotherPage() {
-  const router = useRouter();
   const params = useSearchParams();
 
   // UI state
@@ -48,57 +48,65 @@ export default function MotherPage() {
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
 
+  // First-run flow controls
+  const [modePinnedTop, setModePinnedTop] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false); // prevents auto-creating a session
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll on new messages
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length]);
 
-  // Load session/messages (initial + when params change)
+  // Load session/messages (only when explicitly requested)
   async function load(opts?: { sessionId?: number; dateYMD?: string; forceMode?: ChatMode }) {
     try {
       setLoading(true);
       const qs = new URLSearchParams();
       qs.set("date", opts?.dateYMD || date);
       if (opts?.sessionId) qs.set("sessionId", String(opts.sessionId));
-      if (opts?.forceMode) qs.set("mode", opts.forceMode);
+      if (opts?.forceMode) qs.set("mode", String(opts.forceMode));
 
       const res = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
       setSession(json.session);
       setMessages(json.messages || []);
       if (json.session?.mode) setMode(json.session.mode);
+
+      if (opts?.forceMode || json.session?.mode) setModePinnedTop(true);
     } finally {
       setLoading(false);
     }
   }
 
-  // Deep-link support (?date=&sessionId=)
+  // Deep-link support (?date=&sessionId=&mode=)
   useEffect(() => {
     const sid = params.get("sessionId");
     const dt = params.get("date");
+    const qMode = params.get("mode") as ChatMode | null;
     if (dt) setDate(dt);
-    if (sid) {
-      load({ sessionId: Number(sid), dateYMD: dt || date });
-    } else {
-      load({ dateYMD: dt || date });
+
+    const shouldAutoLoad = Boolean(sid || qMode);
+    if (shouldAutoLoad) {
+      (async () => {
+        if (sid) {
+          await load({ sessionId: Number(sid), dateYMD: dt || date, forceMode: qMode || undefined });
+        } else {
+          await load({ dateYMD: dt || date, forceMode: qMode || undefined });
+        }
+        setHasLoaded(true);
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  // Send a message
   async function sendMessage() {
     const text = input.trim();
     if (!text) return;
     setSending(true);
     try {
-      const body: any = {
-        date,
-        mode,
-        text,
-      };
+      const body: any = { date, mode, text };
       if (session?.id) body.sessionId = session.id;
 
       const res = await fetch("/api/mia", {
@@ -110,14 +118,12 @@ export default function MotherPage() {
       setSession(json.session);
       setMessages(json.messages || []);
       setInput("");
-      // Keep focus on input
       requestAnimationFrame(() => inputRef.current?.focus());
     } finally {
       setSending(false);
     }
   }
 
-  // New chat (same day -> seqInDay++)
   async function startNewChat() {
     setSending(true);
     try {
@@ -136,7 +142,6 @@ export default function MotherPage() {
     }
   }
 
-  // Keyboard: Enter to send, Shift+Enter newline
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -144,14 +149,51 @@ export default function MotherPage() {
     }
   }
 
+  function selectMode(next: ChatMode) {
+    setMode(next);
+    if (!modePinnedTop) setModePinnedTop(true);
+    if (!hasLoaded) {
+      (async () => {
+        await load({ dateYMD: date, forceMode: next });
+        setHasLoaded(true);
+      })();
+    }
+  }
+
   const modeChips = useMemo(
     () => [
-      { key: "MOOD" as const, label: "Mood & Well-Being", icon: <HeartPulse className="h-4 w-4" /> , bg: "bg-indigo-600", hover: "hover:bg-indigo-500" },
+      { key: "MOOD" as const, label: "Mood & Well-Being", icon: <HeartPulse className="h-4 w-4" />, bg: "bg-indigo-600", hover: "hover:bg-indigo-500" },
       { key: "BONDING" as const, label: "Bonding", icon: <span className="text-base">🤱</span>, bg: "bg-emerald-600", hover: "hover:bg-emerald-500" },
-      { key: "HEALTH" as const, label: "Medical", icon: <Stethoscope className="h-4 w-4" />, bg: "bg-rose-600", hover: "hover:bg-rose-500" },
+      { key: "HEALTH" as const, label: "Help / Ask Questions", icon: <Stethoscope className="h-4 w-4" />, bg: "bg-rose-600", hover: "hover:bg-rose-500" },
     ],
     []
   );
+
+  const showCenteredChooser = !modePinnedTop && messages.length === 0 && !hasLoaded;
+
+  // ---- Variants (typed) ----
+  const overlayVariants: Variants = {
+    initial: { opacity: 0, scale: 0.98 },
+    animate: {
+      opacity: 1,
+      scale: 1,
+      transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
+    },
+    exit: {
+      opacity: 0,
+      scale: 0.98,
+      transition: { duration: 0.16, ease: [0.4, 0, 1, 1] as [number, number, number, number] },
+    },
+  };
+
+  const chipsRowVariants: Variants = {
+    initial: { opacity: 0, y: -6 },
+    animate: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
+    },
+  };
 
   return (
     <div className="h-dvh grid grid-rows-[auto_1fr_auto] bg-neutral-950 text-neutral-50">
@@ -164,31 +206,19 @@ export default function MotherPage() {
             </div>
             <div className="text-sm sm:text-base font-semibold">Mia</div>
             <div className="ml-2 hidden sm:block text-xs text-neutral-400">
-              {mode === "GENERAL" ? "General support" : mode === "MOOD" ? "Mood & Well-Being" : mode === "BONDING" ? "Bonding" : "Medical"}
+              {mode === "GENERAL" ? "General support" : mode === "MOOD" ? "Mood & Well-Being" : mode === "BONDING" ? "Bonding" : "Help / Ask Questions"}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Link
-              href="/mother/history"
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-200 hover:bg-white/10"
-              title="History"
-            >
+            <Link href="/mother/history" className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-200 hover:bg-white/10">
               <HistoryIcon className="h-4 w-4" />
               History
             </Link>
-            <button
-              onClick={startNewChat}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20"
-              title="Start new chat"
-            >
+            <button onClick={startNewChat} className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20">
               <Plus className="h-4 w-4" />
               New chat
             </button>
-            <Link
-              href="/provider"
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20"
-              title="Message your provider"
-            >
+            <Link href="/provider" className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20">
               <UserSquare2 className="h-4 w-4" />
               Provider
             </Link>
@@ -197,51 +227,89 @@ export default function MotherPage() {
       </header>
 
       {/* Messages */}
-      <div ref={scrollRef} className="mx-auto max-w-5xl w-full overflow-y-auto px-3 sm:px-4 py-4">
-        {/* Mode chips row */}
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {modeChips.map((m) => {
-            const active = mode === m.key;
-            const className = [
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition",
-              active ? `${m.bg} text-white` : "bg-white/8 text-neutral-200 hover:bg-white/12",
-              active ? "shadow-[0_8px_30px_rgba(0,0,0,0.35)]" : "",
-            ].join(" ");
-            return (
-              <button key={m.key} onClick={() => setMode(m.key)} className={className}>
-                {m.icon}<span>{m.label}</span>
-              </button>
-            );
-          })}
-          {mode !== "GENERAL" && (
-            <button
-              onClick={() => setMode("GENERAL")}
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-neutral-200 bg-white/8 hover:bg-white/12"
-              title="Back to General"
+      <div ref={scrollRef} className="mx-auto max-w-5xl w-full overflow-y-auto px-3 sm:px-4 py-4 relative">
+        {/* FIRST-RUN CENTERED CHOOSER */}
+        <AnimatePresence>
+          {showCenteredChooser && (
+            <motion.div
+              className="absolute inset-0 z-10 flex items-center justify-center"
+              variants={overlayVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
             >
-              Reset to General
-            </button>
+              <div className="pointer-events-auto">
+                <div className="flex flex-col items-center gap-4">
+                  <button
+                    onClick={() => selectMode("MOOD")}
+                    className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition bg-indigo-600 text-white shadow-[0_8px_30px_rgba(79,70,229,0.45)] hover:bg-indigo-500"
+                  >
+                    <HeartPulse className="h-4 w-4" />
+                    Mood & Well-Being
+                  </button>
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => selectMode("BONDING")}
+                      className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition bg-emerald-600 text-white shadow-[0_8px_30px_rgba(16,185,129,0.45)] hover:bg-emerald-500"
+                    >
+                      <span className="text-base">🤱</span>
+                      Bonding
+                    </button>
+                    <button
+                      onClick={() => selectMode("HEALTH")}
+                      className="inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition bg-rose-600 text-white shadow-[0_8px_30px_rgba(244,63,94,0.45)] hover:bg-rose-500"
+                    >
+                      <Stethoscope className="h-4 w-4" />
+                      Help / Ask Questions
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => { setMode("GENERAL"); setModePinnedTop(true); setHasLoaded(true); }}
+                    className="mt-1 text-xs text-neutral-300 hover:text-white"
+                  >
+                    or continue with General support →
+                  </button>
+                </div>
+              </div>
+              <div className="absolute inset-0 -z-10 bg-neutral-950/60 backdrop-blur-sm" />
+            </motion.div>
           )}
-        </div>
+        </AnimatePresence>
+
+        {/* Mode chips row */}
+        {!showCenteredChooser && (
+          <motion.div className="mb-3 flex flex-wrap items-center gap-2" variants={chipsRowVariants} initial="initial" animate="animate">
+            {modeChips.map((m) => {
+              const active = mode === m.key;
+              const className = [
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition",
+                active ? `${m.bg} text-white` : "bg-white/8 text-neutral-200 hover:bg-white/12",
+                active ? "shadow-[0_8px_30px_rgba(0,0,0,0.35)]" : "",
+              ].join(" ");
+              return (
+                <button key={m.key} onClick={() => selectMode(m.key)} className={className}>
+                  {m.icon}<span>{m.label}</span>
+                </button>
+              );
+            })}
+            {mode !== "GENERAL" && (
+              <button onClick={() => selectMode("GENERAL")} className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-neutral-200 bg-white/8 hover:bg-white/12">
+                Reset to General
+              </button>
+            )}
+          </motion.div>
+        )}
 
         {/* Conversation */}
         <div className="space-y-3">
-          {loading && messages.length === 0 && (
-            <div className="text-sm text-neutral-400">Loading conversation…</div>
-          )}
-
+          {loading && messages.length === 0 && hasLoaded && <div className="text-sm text-neutral-400">Loading conversation…</div>}
           {messages.map((m) => {
             const isMe = m.role === "MOTHER";
             const isAwaiting = m.oversight === "AWAITING_PROVIDER";
-            const bubble =
-              isMe
-                ? "bg-gradient-to-tr from-purple-500/90 to-fuchsia-500/90"
-                : "bg-white/8";
-            const border =
-              isMe ? "border-white/10" : "border-white/10";
+            const bubble = isMe ? "bg-gradient-to-tr from-purple-500/90 to-fuchsia-500/90" : "bg-white/8";
             return (
               <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[90%] sm:max-w-[75%] rounded-2xl border ${border} ${bubble} px-4 py-3`}>
+                <div className={`max-w-[90%] sm:max-w-[75%] rounded-2xl border border-white/10 ${bubble} px-4 py-3`}>
                   <div className="mb-1 flex items-center gap-2">
                     <span className="text-[11px] uppercase tracking-wide text-white/80">
                       {m.role === "MOTHER" ? "You" : m.role === "PROVIDER" ? "Provider" : "Mia"}
@@ -297,20 +365,6 @@ export default function MotherPage() {
                 <Send className="h-4 w-4" />
                 Send
               </button>
-            </div>
-          </div>
-
-          {/* Hint row */}
-          <div className="mt-2 flex items-center justify-between text-[12px] text-neutral-400">
-            <div>
-              Press <kbd className="rounded bg-white/10 px-1.5 py-[2px]">Enter</kbd> to send • <kbd className="rounded bg-white/10 px-1.5 py-[2px]">Shift</kbd>+<kbd className="rounded bg-white/10 px-1.5 py-[2px]">Enter</kbd> for a new line
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="hidden sm:inline">Go to</span>
-              <Link href="/mother/history" className="inline-flex items-center gap-1 text-neutral-300 hover:text-white">
-                <HistoryIcon className="h-3.5 w-3.5" />
-                History
-              </Link>
             </div>
           </div>
         </div>
