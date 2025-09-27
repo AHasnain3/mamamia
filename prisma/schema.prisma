@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+ 
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+ 
+enum DeliveryType { VAGINAL C_SECTION VBAC OTHER }
+enum MoodScore { VERY_LOW LOW NEUTRAL HIGH VERY_HIGH } // or use Int 1–5
+enum BleedingLevel { NONE LIGHT MODERATE HEAVY }
+enum FeedingMode { BREAST PUMP FORMULA MIXED }
+enum TicketStatus { PENDING ANSWERED WITHDRAWN EXPIRED }
+ 
+model MotherProfile {
+  id             Int            @id @default(autoincrement())
+  preferredName  String
+  deliveryType   DeliveryType
+  deliveryDate   DateTime
+  contactMethods Json           // {email, sms, partnerContact, ...}
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+ 
+  checkIns       CheckIn[]
+  careContacts   CareContact[]
+  relayTickets   RelayTicket[]
+  wearable       WearableSample[]
+}
+ 
+model CheckIn {
+  id        Int            @id @default(autoincrement())
+  motherId  Int
+  date      DateTime
+  // Use Ints for numeric fields; swap MoodScore for Int if you prefer 1–5
+  mood      MoodScore
+  sleepMin  Int            // minutes slept
+  painScore Int            // 0–10
+  bleeding  BleedingLevel
+  feeding   FeedingMode
+  flags     Json           // e.g., ["RED_FEVER","YELLOW_PAIN_UP"]
+  notes     String?        // short free-text if needed
+ 
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+ 
+  mother    MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
+ 
+  @@index([motherId, date])
+  @@unique([motherId, date]) // at most one check-in per day
+}
+ 
+model CareContact {
+  id         Int            @id @default(autoincrement())
+  motherId   Int
+  name       String
+  role       String         // OB, Midwife, RN, Partner
+  emailSMS   String
+  consented  Boolean        @default(false)
+  lastUsed   DateTime?
+ 
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+ 
+  mother     MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  @@index([motherId])
+}
+ 
+model RelayTicket {
+  id                 Int            @id @default(autoincrement())
+  motherId           Int
+  question           String
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  riskFlags          Json           // structured flags array
+  summarySnapshot    Json           // compact summary of last 7d state
+  status             TicketStatus   @default(PENDING)
+  providerLinkExpiry DateTime?
+ 
+  mother             MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  providerDrafts     ProviderDraft[]
+  providerReplies    ProviderReply[]
+ 
+  @@index([motherId])
+  @@index([providerLinkExpiry])
+}
+ 
+model ProviderDraft {
+  id           Int          @id @default(autoincrement())
+  ticketId     Int
+  draftText    String
+  modelMeta    Json         // {model:"gpt-4o", temp:0.5, tokens:...}
+  lastEditedAt DateTime     @default(now())
+  createdAt    DateTime     @default(now())
+ 
+  ticket       RelayTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  @@index([ticketId])
+}
+ 
+model ProviderReply {
+  id           Int          @id @default(autoincrement())
+  ticketId     Int
+  finalText    String
+  providerName String
+  sentAt       DateTime     @default(now())
+  ackByMother  Boolean      @default(false)
+ 
+  ticket       RelayTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  @@index([ticketId])
+}
+ 
+model WearableSample {
+  id        Int          @id @default(autoincrement())
+  motherId  Int
+  date      DateTime
+  sleepMin  Int?
+  hrvMs     Int?         // heart rate variability (optional)
+  steps     Int?
+  restingHr Int?
+ 
+  createdAt DateTime     @default(now())
+ 
+  mother    MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+ 
+  @@index([motherId, date])
+  @@unique([motherId, date])
+}
