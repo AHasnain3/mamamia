@@ -15,6 +15,8 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 
 type ChatMode = "GENERAL" | "MOOD" | "BONDING" | "HEALTH";
+type SurveyMode = "MOOD" | "BONDING";
+const isSurveyMode = (m: ChatMode): m is SurveyMode => m === "MOOD" || m === "BONDING";
 
 type Session = {
   id: number;
@@ -51,6 +53,17 @@ export default function MotherPage() {
   // First-run flow controls
   const [modePinnedTop, setModePinnedTop] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false); // prevents auto-creating a session
+
+  // Survey state
+  const [surveyOpen, setSurveyOpen] = useState<false | SurveyMode>(false);
+  // MOOD form
+  const [exercise, setExercise] = useState<"NONE"|"LIGHT"|"MODERATE"|"VIGOROUS">("LIGHT");
+  const [eating, setEating] = useState<"POOR"|"FAIR"|"GOOD"|"EXCELLENT">("GOOD");
+  const [sleep, setSleep] = useState<"POOR"|"FAIR"|"GOOD"|"EXCELLENT">("FAIR");
+  const [mentalScore, setMentalScore] = useState<number>(6);
+  // BONDING form
+  const [babyContentScore, setBabyContentScore] = useState<number>(7);
+  const [timeWithBabyMin, setTimeWithBabyMin] = useState<number>(60);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -304,15 +317,74 @@ export default function MotherPage() {
     }
   }
 
+  // Mode selector
   function selectMode(next: ChatMode) {
     setMode(next);
-    if (!modePinnedTop) setModePinnedTop(true);
-    if (!hasLoaded) {
+
+    // HEALTH: skip popup, jump into chat (no prefilled input now)
+    if (next === "HEALTH") {
+      setSurveyOpen(false);
+      if (!modePinnedTop) setModePinnedTop(true);
       (async () => {
-        await load({ dateYMD: date, forceMode: next });
-        setHasLoaded(true);
+        if (!hasLoaded) {
+          await load({ dateYMD: date, forceMode: next });
+          setHasLoaded(true);
+        } else {
+          await load({ dateYMD: date, forceMode: next });
+        }
+        requestAnimationFrame(() => inputRef.current?.focus());
       })();
+      return;
     }
+
+    // MOOD/BONDING: open survey modal; otherwise ensure it's closed
+    if (isSurveyMode(next)) {
+      setSurveyOpen(next); // "MOOD" | "BONDING"
+    } else {
+      setSurveyOpen(false); // handles "GENERAL"
+    }
+  }
+
+  // Submit surveys then start the chat
+  async function submitSurvey() {
+    if (!surveyOpen) return;
+
+    const base = {
+      type: surveyOpen as SurveyMode,
+      date,
+      motherId: session?.motherId ?? null,
+      sessionId: session?.id ?? null,
+    };
+
+    const payload =
+      surveyOpen === "MOOD"
+        ? { ...base, exercise, eating, sleep, mentalScore }
+        : { ...base, babyContentScore, timeWithBabyMin };
+
+    const res = await fetch("/api/survey", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      console.error("Survey save failed");
+      return;
+    }
+
+    const modeToLoad: ChatMode = isSurveyMode(surveyOpen) ? surveyOpen : "GENERAL";
+
+    setSurveyOpen(false);
+    if (!modePinnedTop) setModePinnedTop(true);
+
+    if (!hasLoaded) {
+      await load({ dateYMD: date, forceMode: modeToLoad });
+      setHasLoaded(true);
+    } else {
+      await load({ dateYMD: date, forceMode: modeToLoad });
+    }
+
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   const modeChips = useMemo(
@@ -344,29 +416,133 @@ export default function MotherPage() {
 
   const showCenteredChooser = !modePinnedTop && messages.length === 0 && !hasLoaded;
 
-  // ---- Variants (typed) ----
+  // Variants
   const overlayVariants: Variants = {
     initial: { opacity: 0, scale: 0.98 },
-    animate: {
-      opacity: 1,
-      scale: 1,
-      transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
-    },
-    exit: {
-      opacity: 0,
-      scale: 0.98,
-      transition: { duration: 0.16, ease: [0.4, 0, 1, 1] as [number, number, number, number] },
-    },
+    animate: { opacity: 1, scale: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] } },
+    exit:    { opacity: 0, scale: 0.98, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] as [number, number, number, number] } },
   };
-
   const chipsRowVariants: Variants = {
     initial: { opacity: 0, y: -6 },
-    animate: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
-    },
+    animate: { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] } },
   };
+
+  // --- Inline Survey Modal ---
+  function SurveyModal() {
+    if (!surveyOpen) return null;
+    const isMood = surveyOpen === "MOOD";
+    return (
+      <div className="absolute inset-0 z-20 flex items-center justify-center">
+        <div className="absolute inset-0 bg-neutral-950/70 backdrop-blur-sm" />
+        <motion.div
+          className="relative z-10 w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-xl"
+          initial={{ opacity: 0, y: 8, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] } }}
+          exit={{ opacity: 0, y: 6, scale: 0.98, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] as [number, number, number, number] } }}
+        >
+          <div className="mb-3 text-sm font-semibold text-white">
+            {isMood ? "Quick check-in: Mood & Well-Being" : "Quick check-in: Bonding"}
+          </div>
+
+          {isMood ? (
+            <div className="space-y-4 text-sm">
+              {/* Exercise */}
+              <Field label="Recent exercise habits">
+                <ChoiceRow value={exercise} onChange={setExercise} options={["NONE","LIGHT","MODERATE","VIGOROUS"]} />
+              </Field>
+              {/* Eating */}
+              <Field label="Eating habits">
+                <ChoiceRow value={eating} onChange={setEating} options={["POOR","FAIR","GOOD","EXCELLENT"]} />
+              </Field>
+              {/* Sleep */}
+              <Field label="Sleep habits">
+                <ChoiceRow value={sleep} onChange={setSleep} options={["POOR","FAIR","GOOD","EXCELLENT"]} />
+              </Field>
+              {/* Mental score */}
+              <Field label="Current mental well-being (1–10)">
+                <NumberSlider value={mentalScore} setValue={setMentalScore} min={1} max={10} />
+              </Field>
+            </div>
+          ) : (
+            <div className="space-y-4 text-sm">
+              <Field label="Baby’s apparent contentness (1–10)">
+                <NumberSlider value={babyContentScore} setValue={setBabyContentScore} min={1} max={10} />
+              </Field>
+              <Field label="Time spent with baby (minutes)">
+                <input
+                  type="number"
+                  min={0}
+                  className="w-28 rounded-md border border-white/15 bg-white/5 px-2 py-1 outline-none"
+                  value={timeWithBabyMin}
+                  onChange={(e) => setTimeWithBabyMin(Math.max(0, Number(e.target.value)))}
+                />
+              </Field>
+            </div>
+          )}
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button
+              onClick={() => setSurveyOpen(false)}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-neutral-200 hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={submitSurvey}
+              className="rounded-full bg-purple-500 px-4 py-1.5 text-xs font-medium text-white hover:bg-purple-400"
+            >
+              Save & Continue
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // --- Small UI helpers for the modal ---
+  function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+      <div>
+        <div className="mb-1 text-neutral-300">{label}</div>
+        {children}
+      </div>
+    );
+  }
+  function ChoiceRow<T extends string>({
+    value, onChange, options,
+  }: { value: T; onChange: (v: T) => void; options: T[] }) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => {
+          const active = value === opt;
+          return (
+            <button
+              key={opt}
+              onClick={() => onChange(opt)}
+              className={`rounded-full px-3 py-1.5 text-xs ${active ? "bg-white text-neutral-900" : "bg-white/10 text-neutral-200 hover:bg-white/20"}`}
+            >
+              {opt.charAt(0) + opt.slice(1).toLowerCase()}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  function NumberSlider({ value, setValue, min, max }: { value: number; setValue: (n: number) => void; min: number; max: number }) {
+    return (
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => setValue(Number(e.target.value))}
+          className="w-full accent-purple-500"
+        />
+        <div className="w-10 text-right text-neutral-200">{value}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-dvh grid grid-rows-[auto_1fr_auto] bg-neutral-950 text-neutral-50">
@@ -421,7 +597,7 @@ export default function MotherPage() {
       >
         {/* FIRST-RUN CENTERED CHOOSER */}
         <AnimatePresence>
-          {showCenteredChooser && (
+          {!surveyOpen && !modePinnedTop && messages.length === 0 && !hasLoaded && (
             <motion.div
               className="absolute inset-0 z-10 flex items-center justify-center"
               variants={overlayVariants}
@@ -544,6 +720,9 @@ export default function MotherPage() {
             );
           })}
         </div>
+
+        {/* Survey modal mounted here so it overlays the “big buttons” area */}
+        <AnimatePresence>{surveyOpen && <SurveyModal />}</AnimatePresence>
       </div>
 
       {/* Composer */}
@@ -582,6 +761,20 @@ export default function MotherPage() {
                 <Send className="h-4 w-4" />
                 Send
               </button>
+            </div>
+          </div>
+
+          {/* Hint row */}
+          <div className="mt-2 flex items-center justify-between text:[12px] text-neutral-400">
+            <div>
+              Press <kbd className="rounded bg-white/10 px-1.5 py-[2px]">Enter</kbd> to send • <kbd className="rounded bg-white/10 px-1.5 py-[2px]">Shift</kbd>+<kbd className="rounded bg-white/10 px-1.5 py-[2px]">Enter</kbd> for a new line
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="hidden sm:inline">Go to</span>
+              <Link href="/mother/history" className="inline-flex items-center gap-1 text-neutral-300 hover:text-white">
+                <HistoryIcon className="h-3.5 w-3.5" />
+                History
+              </Link>
             </div>
           </div>
         </div>

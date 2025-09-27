@@ -379,6 +379,29 @@ export default async function ProviderPage({ searchParams }: PageProps) {
               </div>
             </div>
           </Link>
+          <Link
+          href={`/provider/chat${qs}`} // qs ensures selected motherId is passed
+          aria-label="Open Chat with Mother"
+          className={withHalo(
+            "after:bg-pink-600/45",
+            "group-hover:ring-pink-400/70",
+            "hover:shadow-[0_18px_60px_-12px_rgba(219,39,119,0.55)]"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <HeartPulse className="h-7 w-7 text-neutral-900" aria-hidden />
+            <h3 className="text-xl font-semibold text-neutral-900">Chat with Mother</h3>
+          </div>
+          <p className="mt-2 text-sm text-neutral-800/90">
+            Open a messaging interface to communicate with the selected mother directly.
+          </p>
+          <div className="mt-auto w-full">
+            <div className="mt-3 w-full border border-neutral-300/70 px-3 py-2 text-sm flex items-center justify-center bg-white/60 rounded">
+              <span className="text-neutral-900">Start Chat →</span>
+            </div>
+          </div>
+        </Link>
+
         </div>
       </section>
     </main>
