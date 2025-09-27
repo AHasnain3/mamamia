@@ -1,12 +1,13 @@
 // lib/prisma.ts
-import { PrismaClient } from "@/app/generated/prisma";
+// Adjust the import path to match your generator output:
+import { PrismaClient } from "@/app/generated/prisma"; // <-- uses Next.js '@' alias
 
-declare global {
-  // eslint-disable-next-line no-var
-  var prisma: PrismaClient | undefined;
-}
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 export const prisma =
-  global.prisma ?? new PrismaClient({ /* log: ["query","error","warn"] */ });
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+  });
 
-if (process.env.NODE_ENV !== "production") global.prisma = prisma;
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

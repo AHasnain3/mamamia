@@ -292,3 +292,46 @@ model ChatMessage {
 
   @@index([sessionId, createdAt])
 }
+
+// --- Enums ---
+enum ExerciseHabit {
+  NONE
+  LIGHT
+  MODERATE
+  VIGOROUS
+}
+enum EatingHabit {
+  POOR
+  FAIR
+  GOOD
+  EXCELLENT
+}
+enum SleepHabit {
+  POOR
+  FAIR
+  GOOD
+  EXCELLENT
+}
+
+// --- Surveys ---
+model MoodWellbeingSurvey {
+  id            Int            @id @default(autoincrement())
+  motherId      Int?
+  date          DateTime
+  exercise      ExerciseHabit
+  eating        EatingHabit
+  sleep         SleepHabit
+  mentalScore   Int            // 1..10
+  sessionId     Int?           // link to Session if you want it
+  createdAt     DateTime       @default(now())
+}
+
+model BondingSurvey {
+  id                 Int      @id @default(autoincrement())
+  motherId           Int?
+  date               DateTime
+  babyContentScore   Int      // 1..10
+  timeWithBabyMin    Int      // minutes
+  sessionId          Int?
+  createdAt          DateTime @default(now())
+}
