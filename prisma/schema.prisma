@@ -2,127 +2,293 @@ generator client {
   provider = "prisma-client-js"
   output   = "../app/generated/prisma"
 }
- 
+
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
- 
-enum DeliveryType { VAGINAL C_SECTION VBAC OTHER }
-enum MoodScore { VERY_LOW LOW NEUTRAL HIGH VERY_HIGH } // or use Int 1–5
-enum BleedingLevel { NONE LIGHT MODERATE HEAVY }
-enum FeedingMode { BREAST PUMP FORMULA MIXED }
-enum TicketStatus { PENDING ANSWERED WITHDRAWN EXPIRED }
- 
+
+/**
+ * ===== Your enums (expanded to avoid parser issues) =====
+ */
+enum DeliveryType {
+  VAGINAL
+  C_SECTION
+  VBAC
+  OTHER
+}
+
+enum MoodScore {
+  VERY_LOW
+  LOW
+  NEUTRAL
+  HIGH
+  VERY_HIGH
+}
+
+enum BleedingLevel {
+  NONE
+  LIGHT
+  MODERATE
+  HEAVY
+}
+
+enum FeedingMode {
+  BREAST
+  PUMP
+  FORMULA
+  MIXED
+}
+
+enum TicketStatus {
+  PENDING
+  ANSWERED
+  WITHDRAWN
+  EXPIRED
+}
+
+/**
+ * ===== Diary/triage enums =====
+ */
+enum PpdStage {
+  UNDIAGNOSED
+  ACUTE
+  SUBACUTE
+  DELAYED
+}
+
+enum RiskSignal {
+  GREEN
+  YELLOW
+  RED
+}
+
+/**
+ * ===== Models =====
+ */
 model MotherProfile {
-  id             Int            @id @default(autoincrement())
+  id             Int          @id @default(autoincrement())
   preferredName  String
   deliveryType   DeliveryType
   deliveryDate   DateTime
-  contactMethods Json           // {email, sms, partnerContact, ...}
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
- 
-  checkIns       CheckIn[]
-  careContacts   CareContact[]
-  relayTickets   RelayTicket[]
-  wearable       WearableSample[]
+  contactMethods Json
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Added for diary flows
+  tz       String?
+  ppdStage PpdStage @default(UNDIAGNOSED)
+
+  // NEW (for avatar on Provider page)
+  photoUrl String?   // e.g. "/patients/ali.jpg"
+
+  checkIns     CheckIn[]
+  careContacts CareContact[]
+  relayTickets RelayTicket[]
+  wearable     WearableSample[]
+
+  diaryEntries DiaryEntry[]
+  dailyPrompts DailyPrompt[]
+  alerts       ProviderAlert[]
+  ChatSession  ChatSession[]
 }
- 
+
+
 model CheckIn {
-  id        Int            @id @default(autoincrement())
+  id        Int           @id @default(autoincrement())
   motherId  Int
   date      DateTime
-  // Use Ints for numeric fields; swap MoodScore for Int if you prefer 1–5
   mood      MoodScore
-  sleepMin  Int            // minutes slept
-  painScore Int            // 0–10
+  sleepMin  Int
+  painScore Int
   bleeding  BleedingLevel
   feeding   FeedingMode
-  flags     Json           // e.g., ["RED_FEVER","YELLOW_PAIN_UP"]
-  notes     String?        // short free-text if needed
- 
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
- 
-  mother    MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
- 
+  flags     Json
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mother MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+
+  @@unique([motherId, date])
   @@index([motherId, date])
-  @@unique([motherId, date]) // at most one check-in per day
 }
- 
+
 model CareContact {
-  id         Int            @id @default(autoincrement())
-  motherId   Int
-  name       String
-  role       String         // OB, Midwife, RN, Partner
-  emailSMS   String
-  consented  Boolean        @default(false)
-  lastUsed   DateTime?
- 
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
- 
-  mother     MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  id        Int       @id @default(autoincrement())
+  motherId  Int
+  name      String
+  role      String
+  emailSMS  String
+  consented Boolean   @default(false)
+  lastUsed  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  mother MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+
   @@index([motherId])
 }
- 
+
 model RelayTicket {
-  id                 Int            @id @default(autoincrement())
+  id                 Int          @id @default(autoincrement())
   motherId           Int
   question           String
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
-  riskFlags          Json           // structured flags array
-  summarySnapshot    Json           // compact summary of last 7d state
-  status             TicketStatus   @default(PENDING)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  riskFlags          Json
+  summarySnapshot    Json
+  status             TicketStatus @default(PENDING)
   providerLinkExpiry DateTime?
- 
-  mother             MotherProfile  @relation(fields: [motherId], references: [id], onDelete: Cascade)
-  providerDrafts     ProviderDraft[]
-  providerReplies    ProviderReply[]
- 
+
+  mother          MotherProfile   @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  providerDrafts  ProviderDraft[]
+  providerReplies ProviderReply[]
+  ChatMessage     ChatMessage[]
+
   @@index([motherId])
   @@index([providerLinkExpiry])
 }
- 
+
 model ProviderDraft {
-  id           Int          @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   ticketId     Int
   draftText    String
-  modelMeta    Json         // {model:"gpt-4o", temp:0.5, tokens:...}
-  lastEditedAt DateTime     @default(now())
-  createdAt    DateTime     @default(now())
- 
-  ticket       RelayTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  modelMeta    Json
+  lastEditedAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  ticket RelayTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
   @@index([ticketId])
 }
- 
+
 model ProviderReply {
-  id           Int          @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   ticketId     Int
   finalText    String
   providerName String
-  sentAt       DateTime     @default(now())
-  ackByMother  Boolean      @default(false)
- 
-  ticket       RelayTicket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sentAt       DateTime @default(now())
+  ackByMother  Boolean  @default(false)
+
+  ticket RelayTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
   @@index([ticketId])
 }
- 
+
 model WearableSample {
-  id        Int          @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   motherId  Int
   date      DateTime
   sleepMin  Int?
-  hrvMs     Int?         // heart rate variability (optional)
+  hrvMs     Int?
   steps     Int?
   restingHr Int?
- 
-  createdAt DateTime     @default(now())
- 
-  mother    MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
- 
-  @@index([motherId, date])
+
+  createdAt DateTime @default(now())
+
+  mother MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+
   @@unique([motherId, date])
+  @@index([motherId, date])
+}
+
+model DailyPrompt {
+  id        Int      @id @default(autoincrement())
+  motherId  Int
+  date      DateTime
+  prompts   Json
+  createdAt DateTime @default(now())
+
+  mother MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+
+  @@unique([motherId, date])
+  @@index([motherId, date])
+}
+
+model DiaryEntry {
+  id            Int         @id @default(autoincrement())
+  motherId      Int
+  date          DateTime
+  freeText      String      @db.Text
+  responses     Json?
+  riskSignal    RiskSignal?
+  redactedNotes String?     @db.Text
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  mother        MotherProfile   @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  ProviderAlert ProviderAlert[]
+
+  @@unique([motherId, date])
+  @@index([motherId, date])
+}
+
+model ProviderAlert {
+  id        Int        @id @default(autoincrement())
+  motherId  Int
+  entryId   Int
+  signal    RiskSignal
+  summary   String     @db.Text
+  createdAt DateTime   @default(now())
+
+  mother MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  entry  DiaryEntry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([motherId, createdAt])
+}
+
+// ===== Mia Chat enums =====
+enum ChatMode {
+  GENERAL
+  MOOD
+  BONDING
+  HEALTH
+}
+
+enum MessageRole {
+  MOTHER
+  MIA
+  PROVIDER
+}
+
+enum OversightStatus {
+  NONE
+  AWAITING_PROVIDER
+  APPROVED
+  MODIFIED
+}
+
+// ===== Mia Chat models =====
+model ChatSession {
+  id        Int      @id @default(autoincrement())
+  motherId  Int
+  date      DateTime // UTC start-of-day for the mother's TZ
+  seqInDay  Int // 1st chat of the day, 2nd, ...
+  mode      ChatMode @default(GENERAL)
+  createdAt DateTime @default(now())
+
+  mother   MotherProfile @relation(fields: [motherId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@unique([motherId, date, seqInDay])
+  @@index([motherId, date])
+}
+
+model ChatMessage {
+  id            Int             @id @default(autoincrement())
+  sessionId     Int
+  role          MessageRole
+  content       String          @db.Text
+  oversight     OversightStatus @default(NONE)
+  relayTicketId Int?
+  meta          Json?
+  createdAt     DateTime        @default(now())
+
+  session     ChatSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  relayTicket RelayTicket? @relation(fields: [relayTicketId], references: [id])
+
+  @@index([sessionId, createdAt])
 }
