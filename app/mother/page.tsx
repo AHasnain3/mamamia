@@ -41,12 +41,19 @@ type Msg = {
 export default function MotherPage() {
   const params = useSearchParams();
 
-  // --- motherId from URL (used in ALL requests)
+  // at top of MotherPage component
   const motherId = useMemo(() => {
     const raw = params.get("motherId");
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   }, [params]);
+
+  // helper
+  function urlWithMotherId(path: string) {
+    if (!motherId) return path;
+    const sep = path.includes("?") ? "&" : "?";
+    return `${path}${sep}motherId=${motherId}`;
+  }
 
   // UI state
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -143,15 +150,19 @@ export default function MotherPage() {
     return qs;
   };
 
+  // ---- NEW: effective mother id helper ----
+  const getMotherId = () => session?.motherId ?? motherId ?? null;
+
   async function load(opts?: { sessionId?: number; dateYMD?: string; forceMode?: ChatMode }) {
     try {
       setLoading(true);
       const qs = withMotherId(new URLSearchParams());
       qs.set("date", opts?.dateYMD || date);
       if (opts?.sessionId) qs.set("sessionId", String(opts.sessionId));
-      if (opts?.forceMode) qs.set("mode", String(opts?.forceMode));
+      if (opts?.forceMode) qs.set("mode", String(opts.forceMode));
 
       const res = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
+
       const json = await res.json();
       setSession(json.session);
       setMessages(json.messages || []);
@@ -184,13 +195,27 @@ export default function MotherPage() {
   }, [params]);
 
   async function startFreshSession(nextMode: ChatMode): Promise<Session> {
-    const res = await fetch("/api/mia", {
+    const mid = getMotherId();
+    if (!mid) throw new Error("No motherId available to create a session. Ensure ?motherId=… is in the URL.");
+
+    const res = await fetch(urlWithMotherId("/api/mia"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motherId, date, mode: nextMode, newChat: true, createOnly: true }),
+      body: JSON.stringify({ date, mode: nextMode, newChat: true, createOnly: true, motherId: mid }),
     });
-    const json = await res.json();
-    const sess: Session = json.session;
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Failed to create session (${res.status}): ${text || "no body"}`);
+    }
+
+    const json = await res.json().catch(() => ({} as any));
+    const sess: Session | null = json?.session ?? null;
+
+    if (!sess || !sess.id) {
+      throw new Error("API returned no session (missing `session.id`).");
+    }
+
     setSession(sess);
     setMessages(json.messages || []);
     setHasLoaded(true);
@@ -199,6 +224,7 @@ export default function MotherPage() {
   }
 
   async function streamMiaIntro(targetSessionId: number, nextMode: ChatMode, extras?: any) {
+    // optimistic Mia bubble
     const tempMia: Msg = {
       id: Math.floor(Math.random() * -1e6),
       sessionId: targetSessionId,
@@ -216,17 +242,33 @@ export default function MotherPage() {
 
     const additionalContext = { ...buildAdditionalContext(), intro: introCueForMode(nextMode, extras) };
 
-    const res = await fetch("/api/mia/stream", {
+    // STREAM call (with motherId)
+    const res = await fetch(urlWithMotherId("/api/mia/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motherId, date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
+      body: JSON.stringify({
+        date,
+        mode: nextMode,
+        text: "", // Mia greets first
+        sessionId: targetSessionId,
+        additionalContext,
+        motherId: getMotherId(),
+      }),
     });
 
+    // Fallback (non-stream) — also with motherId
     if (!res.body) {
-      const r = await fetch("/api/mia", {
+      const r = await fetch(urlWithMotherId("/api/mia"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ motherId, date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
+        body: JSON.stringify({
+          date,
+          mode: nextMode,
+          text: "",
+          sessionId: targetSessionId,
+          additionalContext,
+          motherId: getMotherId(),
+        }),
       });
       const json = await r.json();
       setSession(json.session);
@@ -235,12 +277,27 @@ export default function MotherPage() {
     }
 
     const reader = res.body.getReader();
-    theLoop: while (true) {
+    const decoder = new TextDecoder();
+    let acc = "";
+
+    const updateTemp = (content: string | ((prev: string) => string)) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempMia.id ? { ...m, content: typeof content === "function" ? content(m.content) : content } : m
+        )
+      );
+      bumpScroll();
+    };
+
+    while (true) {
       const { value, done } = await reader.read();
-      if (done) break theLoop;
-      const chunk = new TextDecoder().decode(value);
-      for (const line of chunk.split("\n")) {
-        const s = line.trim();
+      if (done) break;
+      acc += decoder.decode(value, { stream: true });
+      const lines = acc.split("\n");
+      acc = lines.pop() || "";
+
+      for (const raw of lines) {
+        const s = raw.trim();
         if (!s) continue;
         let evt: any;
         try {
@@ -248,13 +305,11 @@ export default function MotherPage() {
         } catch {
           continue;
         }
+
         if (evt.type === "session" && evt.session) {
           setSession(evt.session);
         } else if (evt.type === "delta") {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === tempMia.id ? { ...m, content: (m.content || "") + evt.text } : m))
-          );
-          bumpScroll();
+          updateTemp((prev) => prev + evt.text);
         } else if (evt.type === "awaiting_provider") {
           setMessages((prev) =>
             prev.map((m) =>
@@ -269,13 +324,16 @@ export default function MotherPage() {
             )
           );
         } else if (evt.type === "final") {
-          const qs = withMotherId(new URLSearchParams());
+          // Refresh canonical history (with motherId)
+          const qs = new URLSearchParams();
           const sid = evt.sessionId || targetSessionId;
           if (sid) qs.set("sessionId", String(sid));
-          const r = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
+          const r = await fetch(urlWithMotherId(`/api/mia?${qs.toString()}`), { cache: "no-store" });
           const json = await r.json();
           setSession(json.session);
           setMessages(json.messages || []);
+        } else if (evt.type === "error") {
+          updateTemp(`⚠️ ${evt.message}`);
         }
       }
     }
@@ -311,32 +369,34 @@ export default function MotherPage() {
       });
 
     try {
-      const res = await fetch("/api/mia/stream", {
+      // STREAM call (with motherId)
+      const res = await fetch(urlWithMotherId("/api/mia/stream"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          motherId,
           date,
           mode,
           text,
           sessionId: session?.id,
           newChat: !session?.id,
           additionalContext: buildAdditionalContext(),
+          motherId: getMotherId(),
         }),
       });
 
+      // Fallback (non-stream)
       if (!res.body) {
-        const r = await fetch("/api/mia", {
+        const r = await fetch(urlWithMotherId("/api/mia"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            motherId,
             date,
             mode,
             text,
             sessionId: session?.id,
             newChat: !session?.id,
             additionalContext: buildAdditionalContext(),
+            motherId: getMotherId(),
           }),
         });
         const json = await r.json();
@@ -393,10 +453,11 @@ export default function MotherPage() {
               )
             );
           } else if (evt.type === "final") {
-            const qs = withMotherId(new URLSearchParams());
+            // Refresh (with motherId)
+            const qs = new URLSearchParams();
             const sid = evt.sessionId || session?.id;
             if (sid) qs.set("sessionId", String(sid));
-            const r = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
+            const r = await fetch(urlWithMotherId(`/api/mia?${qs.toString()}`), { cache: "no-store" });
             const json = await r.json();
             setSession(json.session);
             setMessages(json.messages || []);
@@ -415,15 +476,20 @@ export default function MotherPage() {
   async function startNewChat() {
     setSending(true);
     try {
-      const res = await fetch("/api/mia", {
+      const mid = getMotherId();
+      if (!mid) {
+        console.error("No motherId available for startNewChat()");
+        return;
+      }
+      const res = await fetch(urlWithMotherId("/api/mia"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          motherId,
           date,
           mode,
           newChat: true,
           createOnly: true,
+          motherId: mid,
         }),
       });
       const json = await res.json();
@@ -478,27 +544,38 @@ export default function MotherPage() {
         ? { ...base, exercise, eating, sleep, mentalScore }
         : { ...base, babyContentScore, timeWithBabyMin };
 
-    const res = await fetch("/api/survey", {
+    const res = await fetch(urlWithMotherId("/api/survey"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
-      console.error("Survey save failed");
+      console.error("Survey save failed", res.status);
       return;
     }
 
     const modeToLoad: ChatMode = isSurveyMode(surveyOpen) ? surveyOpen : "GENERAL";
-
     setSurveyOpen(false);
-    const sess = await startFreshSession(modeToLoad);
+
+    // Try to start a fresh session; if that fails, fall back to a reload.
+    let newSess: Session | null = null;
+    try {
+      newSess = await startFreshSession(modeToLoad);
+    } catch (err) {
+      console.error(err);
+      // Fallback: reload whatever session the server thinks is current for this date/mode
+      await load({ dateYMD: date, forceMode: modeToLoad });
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+
     const surveyContext =
       modeToLoad === "MOOD"
         ? { survey: { exercise, eating, sleep, mentalScore } }
         : { survey: { babyContentScore, timeWithBabyMin } };
-    await streamMiaIntro(sess.id, modeToLoad, surveyContext);
 
+    await streamMiaIntro(newSess.id, modeToLoad, surveyContext);
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
@@ -744,7 +821,7 @@ export default function MotherPage() {
         </AnimatePresence>
 
         {/* Mode chips row */}
-        {!( !modePinnedTop && messages.length === 0 && !hasLoaded) && (
+        {!(!modePinnedTop && messages.length === 0 && !hasLoaded) && (
           <motion.div className="mb-3 flex flex-wrap items-center gap-2" variants={chipsRowVariants} initial="initial" animate="animate">
             {modeChips.map((m) => {
               const active = mode === m.key;
@@ -781,9 +858,7 @@ export default function MotherPage() {
             const isMe = m.role === "MOTHER";
             const isAwaiting = m.oversight === "AWAITING_PROVIDER";
             // Purple bubbles
-            const bubble = isMe
-              ? "bg-gradient-to-tr from-purple-700 to-fuchsia-700"
-              : "bg-purple-600";
+            const bubble = isMe ? "bg-gradient-to-tr from-purple-700 to-fuchsia-700" : "bg-purple-600";
             return (
               <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[90%] sm:max-w-[75%] rounded-2xl border border-purple-900/20 ${bubble} px-4 py-3 shadow-sm`}>
@@ -797,9 +872,7 @@ export default function MotherPage() {
                       </span>
                     )}
                   </div>
-                  <div className="whitespace-pre-wrap text-[15px] leading-7 text-white">
-                    {m.content}
-                  </div>
+                  <div className="whitespace-pre-wrap text-[15px] leading-7 text-white">{m.content}</div>
                 </div>
               </div>
             );
