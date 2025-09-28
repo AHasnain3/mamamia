@@ -28,87 +28,105 @@ async function getMother() {
 
 export default async function BasicInfoPage() {
   const mother = await getMother();
-  if (!mother) return <div>No mother data found.</div>;
+  if (!mother) return <div className="p-6 text-gray-400">No mother data found.</div>;
 
-  const formattedDeliveryDate = new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-  }).format(mother.deliveryDate);
+  const formattedDeliveryDate = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(
+    mother.deliveryDate
+  );
 
   return (
-    <main className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold mb-4">Patient Overview</h1>
+    <main className="h-dvh relative isolate p-6 max-w-5xl mx-auto space-y-8">
+      {/* dark background + radial glow */}
+      <div className="absolute inset-0 -z-20 bg-neutral-950" />
+      <div className="absolute inset-0 -z-10 bg-[radial-gradient(1200px_600px_at_50%_-10%,rgba(168,85,247,0.24),transparent_60%)] pointer-events-none" />
 
-      <div className="flex flex-col md:flex-row gap-6">
-        {/* Profile Photo */}
-        <div className="flex-shrink-0">
-          <div className="relative w-48 h-48 rounded-full overflow-hidden ring-2 ring-neutral-300 shadow-sm">
-            <Image
-              src={mother.photoUrl ?? "/patient-placeholder.jpg"}
-              alt={`${mother.preferredName} profile photo`}
-              fill
-              sizes="192px"
-              className="object-cover"
-            />
+      {/* ===== HEADER ===== */}
+      <section className="border">
+        <div className="bg-purple-600/26 hover:bg-purple-600/40 backdrop-blur-[1px] py-4 md:py-6 transition-colors rounded-lg">
+          <h1 className="text-3xl font-bold text-neutral-50 px-4 md:px-6">Patient Overview</h1>
+        </div>
+      </section>
+
+      {/* ===== PROFILE GRID ===== */}
+      <section className="border rounded-lg p-6 bg-white/10 backdrop-blur-sm shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Profile Photo */}
+          <div className="flex justify-center md:justify-start">
+            <div className="relative w-48 h-48 rounded-full overflow-hidden ring-2 ring-neutral-300 shadow-sm">
+              <Image
+                src={mother.photoUrl ?? "/patient-placeholder.jpg"}
+                alt={`${mother.preferredName} profile photo`}
+                fill
+                sizes="192px"
+                className="object-cover"
+              />
+            </div>
+          </div>
+
+          {/* Info */}
+          <div className="col-span-2 flex flex-col justify-center space-y-3 text-neutral-50">
+            <p>
+              <span className="font-semibold">Name:</span> {mother.preferredName}
+            </p>
+            <p>
+              <span className="font-semibold">Delivery Type:</span> {mother.deliveryType}
+            </p>
+            <p>
+              <span className="font-semibold">Delivery Date:</span> {formattedDeliveryDate}
+            </p>
+            <p>
+              <span className="font-semibold">Time Zone:</span> {mother.tz ?? "Unknown"}
+            </p>
+            <p>
+              <span className="font-semibold">PPD Stage:</span> {mother.ppdStage}
+            </p>
+            <p>
+              <span className="font-semibold">Created At:</span>{" "}
+              {new Intl.DateTimeFormat("en-US", {
+                dateStyle: "medium",
+                timeStyle: "short",
+              }).format(mother.createdAt)}
+            </p>
+            <p>
+              <span className="font-semibold">Last Updated:</span>{" "}
+              {new Intl.DateTimeFormat("en-US", {
+                dateStyle: "medium",
+                timeStyle: "short",
+              }).format(mother.updatedAt)}
+            </p>
           </div>
         </div>
+      </section>
 
-        {/* Info */}
-        <div className="flex-1 space-y-3">
-          <p>
-            <span className="font-semibold">Name:</span> {mother.preferredName}
-          </p>
-          <p>
-            <span className="font-semibold">Delivery Type:</span> {mother.deliveryType}
-          </p>
-          <p>
-            <span className="font-semibold">Delivery Date:</span> {formattedDeliveryDate}
-          </p>
-          <p>
-            <span className="font-semibold">Time Zone:</span> {mother.tz ?? "Unknown"}
-          </p>
-          <p>
-            <span className="font-semibold">PPD Stage:</span> {mother.ppdStage}
-          </p>
-          <p>
-            <span className="font-semibold">Created At:</span>{" "}
-            {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
-              mother.createdAt
-            )}
-          </p>
-          <p>
-            <span className="font-semibold">Last Updated:</span>{" "}
-            {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
-              mother.updatedAt
-            )}
-          </p>
-        </div>
-      </div>
-
-      {/* Care Contacts */}
-      <section className="mt-8">
-        <h2 className="text-2xl font-semibold mb-2">Care Contacts</h2>
+      {/* ===== CARE CONTACTS ===== */}
+      <section className="border rounded-lg p-6 bg-white/10 backdrop-blur-sm shadow-sm">
+        <h2 className="text-2xl font-semibold mb-4 text-neutral-50">Care Contacts</h2>
         {mother.careContacts.length === 0 ? (
-          <p>No care contacts available.</p>
+          <p className="text-neutral-300">No care contacts available.</p>
         ) : (
-          <ul className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {mother.careContacts.map((c, idx) => (
-              <li key={idx} className="border rounded p-3 flex flex-col md:flex-row md:justify-between">
-                <span>
+              <div
+                key={idx}
+                className="p-4 border rounded-lg bg-black/20 hover:bg-black/30 transition-colors text-neutral-50"
+              >
+                <p>
                   <span className="font-semibold">{c.name}</span> ({c.role})
-                </span>
-                <span>{c.emailSMS}</span>
-                <span>{c.consented ? "Consented" : "Not Consented"}</span>
-                <span>
+                </p>
+                <p>{c.emailSMS}</p>
+                <p>{c.consented ? "Consented" : "Not Consented"}</p>
+                <p>
                   Last Used:{" "}
                   {c.lastUsed
-                    ? new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
-                        c.lastUsed
-                      )
+                    ? new Intl.DateTimeFormat("en-US", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }).format(c.lastUsed)
                     : "Never"}
-                </span>
-              </li>
+                </p>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </section>
     </main>

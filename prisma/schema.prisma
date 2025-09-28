@@ -156,6 +156,7 @@ model ProviderDraft {
   ticketId     Int
   draftText    String
   modelMeta    Json
+  approved  Boolean @default(false)  // ✅ must exist
   lastEditedAt DateTime @default(now())
   createdAt    DateTime @default(now())
 

@@ -1,8 +1,16 @@
-// app/provider/page.tsx (replace entire file if easier)
+// app/provider/page.tsx (drop-in)
 import Link from "next/link";
 import Image from "next/image";
 import { prisma } from "@/lib/prisma";
-import { Brain, HeartPulse, NotebookPen, ClipboardCheck, Users } from "lucide-react";
+import {
+  Brain,
+  HeartPulse,
+  NotebookPen,
+  ClipboardCheck,
+  Users,
+  MessageCircle,
+  Home as HomeIcon,
+} from "lucide-react";
 
 type PageProps = { searchParams?: { motherId?: string } };
 
@@ -49,16 +57,16 @@ async function getRecentChips(): Promise<Chip[]> {
   // If no DB data yet, show 10 samples
   if (chips.length === 0) {
     return [
-      { id: 101, name: "Amara K.",   color: "RED"    },
+      { id: 101, name: "Amara K.", color: "RED" },
       { id: 102, name: "Bethany R.", color: "YELLOW" },
-      { id: 103, name: "Celia D.",   color: "GREEN"  },
-      { id: 104, name: "Diana M.",   color: "GREEN"  },
-      { id: 105, name: "Elise P.",   color: "YELLOW" },
-      { id: 106, name: "Farah L.",   color: "GREEN"  },
-      { id: 107, name: "Gina S.",    color: "RED"    },
-      { id: 108, name: "Hana T.",    color: "GREEN"  },
-      { id: 109, name: "Indira P.",  color: "YELLOW" },
-      { id: 110, name: "Juno W.",    color: "GREEN"  },
+      { id: 103, name: "Celia D.", color: "GREEN" },
+      { id: 104, name: "Diana M.", color: "GREEN" },
+      { id: 105, name: "Elise P.", color: "YELLOW" },
+      { id: 106, name: "Farah L.", color: "GREEN" },
+      { id: 107, name: "Gina S.", color: "RED" },
+      { id: 108, name: "Hana T.", color: "GREEN" },
+      { id: 109, name: "Indira P.", color: "YELLOW" },
+      { id: 110, name: "Juno W.", color: "GREEN" },
     ];
   }
   return chips;
@@ -144,7 +152,7 @@ export default async function ProviderPage({ searchParams }: PageProps) {
 
   // use selectedId for downstream links
   const qs = selectedId ? `?motherId=${selectedId}` : "";
-
+  const hasSelection = !!selectedId;
 
   return (
     <main className="h-dvh relative isolate grid grid-rows-[auto_2fr_1fr] font-sans tracking-tight">
@@ -152,15 +160,16 @@ export default async function ProviderPage({ searchParams }: PageProps) {
       <div className="absolute inset-0 -z-20 bg-sky-200" />
       <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(1100px_520px_at_50%_-10%,rgba(199,210,254,0.65),rgba(255,255,255,0.6)_35%,transparent_70%)]" />
 
-      {/* ===== Provider Console (top bar) — recent patients rail ===== */}
+      {/* ===== Provider Console (top bar) — recent patients rail + actions ===== */}
       <section className="border">
         <div className="backdrop-blur-[1px] py-3 md:py-4 transition-colors bg-[rgba(147,51,234,0.26)] hover:bg-[rgba(147,51,234,0.40)]">
-          <div className="flex items-center gap-6 px-3 md:px-4">{/* bigger gap from title */}
+          <div className="flex items-center gap-6 px-3 md:px-4">
+            {/* Title */}
             <h2 className="shrink-0 text-base md:text-lg font-semibold text-neutral-50">
               Provider Console
             </h2>
 
-            {/* Centered, scrollable patient chips with extra leading space */}
+            {/* Chips rail */}
             <div className="min-w-0 flex-1">
               <div className="flex justify-center overflow-x-auto">
                 <div className="ml-6 flex items-center gap-3 md:gap-4 w-max">
@@ -175,7 +184,7 @@ export default async function ProviderPage({ searchParams }: PageProps) {
                           "transition-colors whitespace-nowrap",
                           "text-neutral-900",
                           active
-                            ? "bg-sky-200 border-sky-500"   // <-- blue when selected
+                            ? "bg-sky-200 border-sky-500"
                             : "bg-white/80 border-white/60 hover:bg-white",
                           focusRing,
                         ].join(" ")}
@@ -193,18 +202,31 @@ export default async function ProviderPage({ searchParams }: PageProps) {
               </div>
             </div>
 
-            <div className="shrink-0">
+            {/* Actions: Chat + Home (from earlier version) */}
+            <div className="shrink-0 flex items-center gap-2">
+              {hasSelection && (
+                <Link
+                  href={`/provider/chat${qs}`}
+                  aria-label="Open Chat with Mother"
+                  className="inline-flex items-center gap-2 rounded-lg border border-pink-500/20 bg-pink-500 px-3 py-1.5 text-xs md:text-sm font-medium text-white shadow-sm transition-colors hover:bg-pink-600"
+                >
+                  <MessageCircle className="h-4 w-4" aria-hidden />
+                  <span className="hidden sm:inline">Chat with Mother</span>
+                </Link>
+              )}
+
               <Link
                 href="/"
-                className="px-3 py-1.5 text-xs md:text-sm bg-black text-white border border-black md:hover:bg-neutral-800 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-neutral-200"
+                aria-label="Return Home"
+                className="inline-flex items-center gap-2 rounded-lg border border-neutral-300/70 bg-white px-3 py-1.5 text-xs md:text-sm font-medium text-neutral-800 shadow-sm transition-colors hover:bg-neutral-100"
               >
-                ← Home
+                <HomeIcon className="h-4 w-4" aria-hidden />
+                <span className="hidden sm:inline">Home</span>
               </Link>
             </div>
           </div>
         </div>
       </section>
-
 
       {/* ===== Top row ===== */}
       <section className="border min-h-0 px-3 py-3">
@@ -322,7 +344,9 @@ export default async function ProviderPage({ searchParams }: PageProps) {
 
             <div className="mt-auto text-xs text-neutral-600">
               {updatedAt
-                ? `Updated ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(updatedAt)}`
+                ? `Updated ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
+                    updatedAt as unknown as Date
+                  )}`
                 : "No recent measurements"}
             </div>
 
@@ -379,29 +403,6 @@ export default async function ProviderPage({ searchParams }: PageProps) {
               </div>
             </div>
           </Link>
-          <Link
-          href={`/provider/chat${qs}`} // qs ensures selected motherId is passed
-          aria-label="Open Chat with Mother"
-          className={withHalo(
-            "after:bg-pink-600/45",
-            "group-hover:ring-pink-400/70",
-            "hover:shadow-[0_18px_60px_-12px_rgba(219,39,119,0.55)]"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <HeartPulse className="h-7 w-7 text-neutral-900" aria-hidden />
-            <h3 className="text-xl font-semibold text-neutral-900">Chat with Mother</h3>
-          </div>
-          <p className="mt-2 text-sm text-neutral-800/90">
-            Open a messaging interface to communicate with the selected mother directly.
-          </p>
-          <div className="mt-auto w-full">
-            <div className="mt-3 w-full border border-neutral-300/70 px-3 py-2 text-sm flex items-center justify-center bg-white/60 rounded">
-              <span className="text-neutral-900">Start Chat →</span>
-            </div>
-          </div>
-        </Link>
-
         </div>
       </section>
     </main>

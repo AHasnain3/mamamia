@@ -1,4 +1,3 @@
-// app/diarySummary/page.tsx
 'use client';
 
 import { useEffect, useState } from "react";
@@ -57,42 +56,52 @@ export default function DiarySummaryPage() {
     }
   };
 
-  if (loading) return <div className="p-6 text-gray-700">Loading diary summary...</div>;
-  if (!entry) return <div className="p-6 text-gray-700">No diary entry found for today.</div>;
+  if (loading) return <div className="p-6 text-neutral-200">Loading diary summary...</div>;
+  if (!entry) return <div className="p-6 text-neutral-200">No diary entry found for today.</div>;
 
   const riskColor = entry.riskSignal === "RED"
-    ? "text-red-600"
+    ? "text-red-400"
     : entry.riskSignal === "YELLOW"
-    ? "text-yellow-600"
-    : "text-green-600";
+    ? "text-yellow-400"
+    : "text-green-400";
 
   return (
-    <div className="max-w-3xl mx-auto p-6 flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Diary Summary</h1>
+    <main className="relative h-dvh isolate p-6 max-w-3xl mx-auto flex flex-col gap-6">
+      {/* background layers */}
+      <div className="absolute inset-0 -z-20 bg-neutral-950" />
+      <div className="absolute inset-0 -z-10 pointer-events-none
+                      bg-[radial-gradient(1200px_600px_at_50%_-10%,rgba(168,85,247,0.24),transparent_60%)]" />
 
-      <div className={`p-4 border rounded bg-gray-50 ${riskColor}`}>
-        <h2 className="font-semibold mb-2">Privacy-Preserving Summary</h2>
-        <p>{entry.redactedNotes ?? "No summary available."}</p>
-        {entry.riskSignal && <p className="mt-2 font-medium">Risk Signal: {entry.riskSignal}</p>}
+      <h1 className="text-2xl md:text-3xl font-bold text-neutral-50">Diary Summary</h1>
+
+      <div className={`p-4 border rounded bg-neutral-800/20 ${riskColor}`}>
+        <h2 className="font-semibold mb-2 text-neutral-50">Privacy-Preserving Summary</h2>
+        <p className="text-neutral-200">{entry.redactedNotes ?? "No summary available."}</p>
+        {entry.riskSignal && (
+          <p className="mt-2 font-medium text-neutral-50">Risk Signal: {entry.riskSignal}</p>
+        )}
       </div>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="doctorComment" className="font-medium">Doctor's Comment</label>
+      <div className="flex flex-col gap-3">
+        <label htmlFor="doctorComment" className="font-medium text-neutral-50">
+          Doctor's Comment
+        </label>
         <textarea
           id="doctorComment"
           value={doctorComment}
           onChange={(e) => setDoctorComment(e.target.value)}
           rows={4}
-          className="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="w-full p-3 border rounded bg-neutral-800/20 text-neutral-50
+                     focus:outline-none focus:ring-2 focus:ring-purple-400 transition"
         />
         <button
           onClick={handleSave}
           disabled={saving || !doctorComment.trim()}
-          className="self-end bg-blue-500 text-white px-4 py-2 rounded font-semibold hover:bg-blue-600 disabled:opacity-50"
+          className="self-end bg-purple-600 hover:bg-purple-700 text-neutral-50 px-4 py-2 rounded font-semibold shadow transition disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save Comment"}
         </button>
       </div>
-    </div>
+    </main>
   );
 }
