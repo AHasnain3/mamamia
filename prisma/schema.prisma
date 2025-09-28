@@ -80,7 +80,7 @@ model MotherProfile {
   ppdStage PpdStage @default(UNDIAGNOSED)
 
   // NEW (for avatar on Provider page)
-  photoUrl String?   // e.g. "/patients/ali.jpg"
+  photoUrl String? // e.g. "/patients/ali.jpg"
 
   checkIns     CheckIn[]
   careContacts CareContact[]
@@ -92,7 +92,6 @@ model MotherProfile {
   alerts       ProviderAlert[]
   ChatSession  ChatSession[]
 }
-
 
 model CheckIn {
   id        Int           @id @default(autoincrement())
@@ -300,12 +299,14 @@ enum ExerciseHabit {
   MODERATE
   VIGOROUS
 }
+
 enum EatingHabit {
   POOR
   FAIR
   GOOD
   EXCELLENT
 }
+
 enum SleepHabit {
   POOR
   FAIR
@@ -315,23 +316,23 @@ enum SleepHabit {
 
 // --- Surveys ---
 model MoodWellbeingSurvey {
-  id            Int            @id @default(autoincrement())
-  motherId      Int?
-  date          DateTime
-  exercise      ExerciseHabit
-  eating        EatingHabit
-  sleep         SleepHabit
-  mentalScore   Int            // 1..10
-  sessionId     Int?           // link to Session if you want it
-  createdAt     DateTime       @default(now())
+  id          Int           @id @default(autoincrement())
+  motherId    Int?
+  date        DateTime
+  exercise    ExerciseHabit
+  eating      EatingHabit
+  sleep       SleepHabit
+  mentalScore Int // 1..10
+  sessionId   Int? // link to Session if you want it
+  createdAt   DateTime      @default(now())
 }
 
 model BondingSurvey {
-  id                 Int      @id @default(autoincrement())
-  motherId           Int?
-  date               DateTime
-  babyContentScore   Int      // 1..10
-  timeWithBabyMin    Int      // minutes
-  sessionId          Int?
-  createdAt          DateTime @default(now())
+  id               Int      @id @default(autoincrement())
+  motherId         Int?
+  date             DateTime
+  babyContentScore Int // 1..10
+  timeWithBabyMin  Int // minutes
+  sessionId        Int?
+  createdAt        DateTime @default(now())
 }

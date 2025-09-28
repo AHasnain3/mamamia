@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { localDayToUTC } from "@/lib/time";
 import { runMiaResponse } from "@/lib/cedar";
+import { getSystemForMode } from "@/lib/miaSystem"; // keep if you've added mode-specific system prompts
 
 // Pick a mother (header/query/env fallback, else first, else create demo)
 async function getMother(req) {
@@ -94,28 +95,50 @@ export async function GET(req) {
   }
 }
 
-// --- POST: send a message (creates/loads session, saves messages, generates Mia reply) ---
+// --- POST: send a message OR create a new chat (createOnly) ---
 export async function POST(req) {
   try {
     const mother = await getMother(req);
     const body = await req.json();
+
     const date = body.date || new Date().toISOString().slice(0, 10);
     const mode = String(body.mode || "GENERAL").toUpperCase(); // "GENERAL" | "MOOD" | "BONDING" | "HEALTH"
-    const text = String(body.text ?? "").trim();
-    const newChat = Boolean(body.newChat);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const newChat = Boolean(body.newChat);           // force a brand new session (increments seqInDay)
+    const createOnly = Boolean(body.createOnly);     // create a session, no message/LLM
     const sessionId = body.sessionId;
 
+    // Optional survey context
+    const {
+      exercise, eating, sleep, mentalScore,
+      babyContentScore, timeWithBabyMin,
+    } = body;
+
+    // 1) Create-only flow (for button taps / after survey)
+    if (createOnly) {
+      const session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: true });
+      const messages = await prisma.chatMessage.findMany({
+        where: { sessionId: session.id },
+        orderBy: { createdAt: "asc" },
+      });
+      return NextResponse.json({ session, messages });
+    }
+
+    // 2) Message-sending flow
     if (!text) return NextResponse.json({ error: "Empty text" }, { status: 400 });
 
     let session;
-    if (sessionId) {
+    if (newChat) {
+      // ignore any passed sessionId and force a new one
+      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: true });
+    } else if (sessionId) {
       session = await prisma.chatSession.findUnique({ where: { id: Number(sessionId) } });
       if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
       if (mode && mode !== session.mode) {
         session = await prisma.chatSession.update({ where: { id: session.id }, data: { mode } });
       }
     } else {
-      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat });
+      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: false });
     }
 
     // Store the mother's message
@@ -129,12 +152,18 @@ export async function POST(req) {
       },
     });
 
+    // Mode-specific system prompt (if you added getSystemForMode)
+    const system = getSystemForMode
+      ? getSystemForMode(mode, { exercise, eating, sleep, mentalScore, babyContentScore, timeWithBabyMin })
+      : undefined;
+
     // Generate Mia reply
     const mia = await runMiaResponse({
       mode,
       stage: mother.ppdStage,
       motherName: mother.preferredName,
       userText: text,
+      system, // used if your lib/cedar.js patch accepts 'system'
     });
 
     if (mia.needsProviderReview) {
@@ -163,7 +192,7 @@ export async function POST(req) {
           role: "MIA",
           content: mia.reply,
           oversight: "AWAITING_PROVIDER",
-        relayTicketId: ticket.id,
+          relayTicketId: ticket.id,
           meta: { mode, providerProposed: true, reason: mia.reason || "" },
         },
       });

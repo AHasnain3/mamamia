@@ -81,7 +81,7 @@ export default function MotherPage() {
     });
   }, [messages.length]);
 
-  // Build a compact conversation context to send to backend (Cedar-style “additionalContext”)
+  // Build a compact conversation context to send to backend
   function buildAdditionalContext() {
     const recent = messages.slice(-8).map((m) => ({
       role: m.role,
@@ -98,6 +98,41 @@ export default function MotherPage() {
     };
   }
 
+  // --- helpers to craft an intro cue for Mia (used when Mia starts first)
+  function introCueForMode(nextMode: ChatMode, extras?: any) {
+    if (nextMode === "MOOD") {
+      return {
+        greet: true,
+        tone: "warm, validating, reassuring",
+        instruction:
+          "Open with 2–3 gentle sentences that validate feelings and encourage brief self-reflection. Ask ONE short question to help her notice how she’s doing (e.g., mood, sleep, energy).",
+        survey: extras?.survey ?? null,
+      };
+    }
+    if (nextMode === "BONDING") {
+      return {
+        greet: true,
+        tone: "encouraging, supportive",
+        instruction:
+          "Open with 1–2 friendly sentences, then suggest ONE practical bonding activity she could try today, and ask ONE short follow-up question about their time together.",
+        survey: extras?.survey ?? null,
+      };
+    }
+    if (nextMode === "HEALTH") {
+      return {
+        greet: true,
+        tone: "concerned, helpful",
+        instruction:
+          "Open with a brief, caring greeting and ask what you can help with today. Keep it 1–2 sentences.",
+      };
+    }
+    return {
+      greet: true,
+      tone: "friendly",
+      instruction: "Start with a short, kind greeting and ask how you can support her right now.",
+    };
+  }
+
   // Load session/messages (only when explicitly requested)
   async function load(opts?: {
     sessionId?: number;
@@ -109,7 +144,7 @@ export default function MotherPage() {
       const qs = new URLSearchParams();
       qs.set("date", opts?.dateYMD || date);
       if (opts?.sessionId) qs.set("sessionId", String(opts.sessionId));
-      if (opts?.forceMode) qs.set("mode", String(opts.forceMode));
+      if (opts?.forceMode) qs.set("mode", String(opts?.forceMode));
 
       const res = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
@@ -148,7 +183,151 @@ export default function MotherPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  // Send a message with streaming
+  // --- create a brand-new empty session and return it
+  async function startFreshSession(nextMode: ChatMode): Promise<Session> {
+    const res = await fetch("/api/mia", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date,
+        mode: nextMode,
+        newChat: true,
+        createOnly: true,
+      }),
+    });
+    const json = await res.json();
+    const sess: Session = json.session;
+    setSession(sess);
+    setMessages(json.messages || []);
+    setHasLoaded(true);
+    setModePinnedTop(true);
+    return sess;
+  }
+
+  // --- stream an intro message from Mia (she speaks first)
+  async function streamMiaIntro(targetSessionId: number, nextMode: ChatMode, extras?: any) {
+    // optimistic Mia bubble
+    const tempMia: Msg = {
+      id: Math.floor(Math.random() * -1e6),
+      sessionId: targetSessionId,
+      role: "MIA",
+      content: "",
+      oversight: "NONE",
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempMia]);
+
+    const bumpScroll = () =>
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({
+          top: scrollRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+      });
+
+    // build an intro-focused additional context
+    const additionalContext = {
+      ...buildAdditionalContext(),
+      intro: introCueForMode(nextMode, extras),
+    };
+
+    const res = await fetch("/api/mia/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date,
+        mode: nextMode,
+        text: "",                 // <— no mother message, Mia will greet first
+        sessionId: targetSessionId,
+        additionalContext,
+      }),
+    });
+
+    if (!res.body) {
+      // fallback (non-stream) — shouldn’t usually happen
+      const r = await fetch("/api/mia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date,
+          mode: nextMode,
+          text: "", // backend will 400; but stream route should exist. We keep this for safety.
+          sessionId: targetSessionId,
+          additionalContext,
+        }),
+      });
+      const json = await r.json();
+      setSession(json.session);
+      setMessages(json.messages || []);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let acc = "";
+
+    const updateTemp = (content: string | ((prev: string) => string)) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempMia.id
+            ? { ...m, content: typeof content === "function" ? content(m.content) : content }
+            : m
+        )
+      );
+      bumpScroll();
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      acc += decoder.decode(value, { stream: true });
+      const lines = acc.split("\n");
+      acc = lines.pop() || "";
+
+      for (const raw of lines) {
+        const s = raw.trim();
+        if (!s) continue;
+        let evt: any;
+        try {
+          evt = JSON.parse(s);
+        } catch {
+          continue;
+        }
+
+        if (evt.type === "session" && evt.session) {
+          setSession(evt.session);
+        } else if (evt.type === "delta") {
+          updateTemp((prev) => prev + evt.text);
+        } else if (evt.type === "awaiting_provider") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempMia.id
+                ? {
+                    ...m,
+                    content: "Message awaiting provider approval.",
+                    oversight: "AWAITING_PROVIDER",
+                    relayTicketId: evt.ticketId,
+                  }
+                : m
+            )
+          );
+        } else if (evt.type === "final") {
+          // refresh canonical history
+          const qs = new URLSearchParams();
+          const sid = evt.sessionId || targetSessionId;
+          if (sid) qs.set("sessionId", String(sid));
+          const r = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
+          const json = await r.json();
+          setSession(json.session);
+          setMessages(json.messages || []);
+        } else if (evt.type === "error") {
+          updateTemp(`⚠️ ${evt.message}`);
+        }
+      }
+    }
+  }
+
+  // Send a message (user-initiated) with streaming
   async function sendMessage() {
     const text = input.trim();
     if (!text) return;
@@ -174,7 +353,6 @@ export default function MotherPage() {
     setMessages((prev) => [...prev, tempUser, tempMia]);
     setInput("");
 
-    // helper to keep autoscrolling during streaming
     const bumpScroll = () =>
       requestAnimationFrame(() => {
         scrollRef.current?.scrollTo({
@@ -192,12 +370,12 @@ export default function MotherPage() {
           mode,
           text,
           sessionId: session?.id,
-          additionalContext: buildAdditionalContext(), // 👈 include conversation context
+          newChat: !session?.id,
+          additionalContext: buildAdditionalContext(),
         }),
       });
 
       if (!res.body) {
-        // fallback to non-streaming route
         const r = await fetch("/api/mia", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -206,6 +384,7 @@ export default function MotherPage() {
             mode,
             text,
             sessionId: session?.id,
+            newChat: !session?.id,
             additionalContext: buildAdditionalContext(),
           }),
         });
@@ -265,7 +444,6 @@ export default function MotherPage() {
               )
             );
           } else if (evt.type === "final") {
-            // refresh from DB for canonical history
             const qs = new URLSearchParams();
             const sid = evt.sessionId || session?.id;
             if (sid) qs.set("sessionId", String(sid));
@@ -284,7 +462,7 @@ export default function MotherPage() {
     }
   }
 
-  // New chat (same day -> seqInDay++)
+  // New chat button → create empty session (no auto-greeting)
   async function startNewChat() {
     setSending(true);
     try {
@@ -294,9 +472,8 @@ export default function MotherPage() {
         body: JSON.stringify({
           date,
           mode,
-          text: "(started new chat)",
           newChat: true,
-          additionalContext: buildAdditionalContext(),
+          createOnly: true,
         }),
       });
       const json = await res.json();
@@ -321,17 +498,12 @@ export default function MotherPage() {
   function selectMode(next: ChatMode) {
     setMode(next);
 
-    // HEALTH: skip popup, jump into chat (no prefilled input now)
+    // HEALTH: skip popup, create a fresh session and have Mia greet first
     if (next === "HEALTH") {
       setSurveyOpen(false);
-      if (!modePinnedTop) setModePinnedTop(true);
       (async () => {
-        if (!hasLoaded) {
-          await load({ dateYMD: date, forceMode: next });
-          setHasLoaded(true);
-        } else {
-          await load({ dateYMD: date, forceMode: next });
-        }
+        const sess = await startFreshSession(next);
+        await streamMiaIntro(sess.id, next);
         requestAnimationFrame(() => inputRef.current?.focus());
       })();
       return;
@@ -345,7 +517,7 @@ export default function MotherPage() {
     }
   }
 
-  // Submit surveys then start the chat
+  // Submit surveys → start a brand-new chat → Mia greets with tailored tone
   async function submitSurvey() {
     if (!surveyOpen) return;
 
@@ -375,14 +547,13 @@ export default function MotherPage() {
     const modeToLoad: ChatMode = isSurveyMode(surveyOpen) ? surveyOpen : "GENERAL";
 
     setSurveyOpen(false);
-    if (!modePinnedTop) setModePinnedTop(true);
-
-    if (!hasLoaded) {
-      await load({ dateYMD: date, forceMode: modeToLoad });
-      setHasLoaded(true);
-    } else {
-      await load({ dateYMD: date, forceMode: modeToLoad });
-    }
+    const sess = await startFreshSession(modeToLoad);
+    // pass survey answers so Mia can reference them softly
+    const surveyContext =
+      modeToLoad === "MOOD"
+        ? { survey: { exercise, eating, sleep, mentalScore } }
+        : { survey: { babyContentScore, timeWithBabyMin } };
+    await streamMiaIntro(sess.id, modeToLoad, surveyContext);
 
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -446,19 +617,15 @@ export default function MotherPage() {
 
           {isMood ? (
             <div className="space-y-4 text-sm">
-              {/* Exercise */}
               <Field label="Recent exercise habits">
                 <ChoiceRow value={exercise} onChange={setExercise} options={["NONE","LIGHT","MODERATE","VIGOROUS"]} />
               </Field>
-              {/* Eating */}
               <Field label="Eating habits">
                 <ChoiceRow value={eating} onChange={setEating} options={["POOR","FAIR","GOOD","EXCELLENT"]} />
               </Field>
-              {/* Sleep */}
               <Field label="Sleep habits">
                 <ChoiceRow value={sleep} onChange={setSleep} options={["POOR","FAIR","GOOD","EXCELLENT"]} />
               </Field>
-              {/* Mental score */}
               <Field label="Current mental well-being (1–10)">
                 <NumberSlider value={mentalScore} setValue={setMentalScore} min={1} max={10} />
               </Field>
@@ -508,9 +675,7 @@ export default function MotherPage() {
       </div>
     );
   }
-  function ChoiceRow<T extends string>({
-    value, onChange, options,
-  }: { value: T; onChange: (v: T) => void; options: T[] }) {
+  function ChoiceRow<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: T[] }) {
     return (
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
@@ -591,10 +756,7 @@ export default function MotherPage() {
       </header>
 
       {/* Messages */}
-      <div
-        ref={scrollRef}
-        className="mx-auto max-w-5xl w-full overflow-y-auto px-3 sm:px-4 py-4 relative"
-      >
+      <div ref={scrollRef} className="mx-auto max-w-5xl w-full overflow-y-auto px-3 sm:px-4 py-4 relative">
         {/* FIRST-RUN CENTERED CHOOSER */}
         <AnimatePresence>
           {!surveyOpen && !modePinnedTop && messages.length === 0 && !hasLoaded && (
@@ -631,10 +793,10 @@ export default function MotherPage() {
                     </button>
                   </div>
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       setMode("GENERAL");
-                      setModePinnedTop(true);
-                      setHasLoaded(true);
+                      const sess = await startFreshSession("GENERAL");
+                      await streamMiaIntro(sess.id, "GENERAL");
                     }}
                     className="mt-1 text-xs text-neutral-300 hover:text-white"
                   >
@@ -673,7 +835,11 @@ export default function MotherPage() {
             })}
             {mode !== "GENERAL" && (
               <button
-                onClick={() => selectMode("GENERAL")}
+                onClick={async () => {
+                  setMode("GENERAL");
+                  const sess = await startFreshSession("GENERAL");
+                  await streamMiaIntro(sess.id, "GENERAL");
+                }}
                 className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-neutral-200 bg-white/8 hover:bg-white/12"
               >
                 Reset to General
@@ -695,16 +861,10 @@ export default function MotherPage() {
               : "bg-white/8";
             return (
               <div key={m.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[90%] sm:max-w-[75%] rounded-2xl border border-white/10 ${bubble} px-4 py-3`}
-                >
+                <div className={`max-w-[90%] sm:max-w-[75%] rounded-2xl border border-white/10 ${bubble} px-4 py-3`}>
                   <div className="mb-1 flex items-center gap-2">
                     <span className="text-[11px] uppercase tracking-wide text-white/80">
-                      {m.role === "MOTHER"
-                        ? "You"
-                        : m.role === "PROVIDER"
-                        ? "Provider"
-                        : "Mia"}
+                      {m.role === "MOTHER" ? "You" : m.role === "PROVIDER" ? "Provider" : "Mia"}
                     </span>
                     {isAwaiting && (
                       <span className="rounded-full bg-amber-500/20 px-2 py-[2px] text-[11px] text-amber-300 border border-amber-500/30">
@@ -721,7 +881,7 @@ export default function MotherPage() {
           })}
         </div>
 
-        {/* Survey modal mounted here so it overlays the “big buttons” area */}
+        {/* Survey modal */}
         <AnimatePresence>{surveyOpen && <SurveyModal />}</AnimatePresence>
       </div>
 
