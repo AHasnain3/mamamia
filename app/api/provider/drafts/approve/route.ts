@@ -2,12 +2,12 @@
 export const runtime = "nodejs";
 
 import { prisma } from "@/lib/prisma";
-// Enums are generated to app/generated/prisma per your schema's `output`
-import {
-  TicketStatus,
-  OversightStatus,
-  MessageRole,
-} from "@/app/generated/prisma";
+import { TicketStatus, OversightStatus, MessageRole } from "@/app/generated/prisma";
+
+function coalesce<T>(...vals: Array<T | null | undefined>): T | undefined {
+  for (const v of vals) if (v !== null && v !== undefined) return v as T;
+  return undefined;
+}
 
 async function safeJson(req: Request): Promise<any> {
   try {
@@ -22,95 +22,86 @@ export async function POST(req: Request) {
     const url = new URL(req.url);
     const body = await safeJson(req);
 
-    // Accept ticketId OR draftId from body OR querystring
-    const ticketIdRaw =
-      body.ticketId ?? url.searchParams.get("ticketId") ?? null;
-    const draftIdRaw = body.draftId ?? url.searchParams.get("draftId") ?? null;
+    // Accept ticketId OR draftId (body or query)
+    const ticketId = Number(coalesce(body.ticketId, url.searchParams.get("ticketId")));
+    const draftId  = Number(coalesce(body.draftId,  url.searchParams.get("draftId")));
 
-    const ticketId = ticketIdRaw ? Number(ticketIdRaw) : null;
-    const draftId = draftIdRaw ? Number(draftIdRaw) : null;
+    let ticket = null as Awaited<ReturnType<typeof prisma.relayTicket.findUnique>> | null;
+    let draft  = null as Awaited<ReturnType<typeof prisma.providerDraft.findUnique>> | null;
 
-    // Resolve the ticket from whichever id we got
-    let ticket = null as Awaited<
-      ReturnType<typeof prisma.relayTicket.findUnique>
-    > | null;
-    let draft = null as Awaited<
-      ReturnType<typeof prisma.providerDraft.findUnique>
-    > | null;
-
-    if (ticketId) {
+    if (Number.isFinite(ticketId)) {
       ticket = await prisma.relayTicket.findUnique({ where: { id: ticketId } });
-      if (!ticket) {
-        return new Response(JSON.stringify({ error: "ticket not found" }), {
-          status: 404,
-        });
-      }
-    } else if (draftId) {
+      if (!ticket) return new Response(JSON.stringify({ error: "ticket not found" }), { status: 404 });
+    } else if (Number.isFinite(draftId)) {
       draft = await prisma.providerDraft.findUnique({ where: { id: draftId } });
-      if (!draft) {
-        return new Response(JSON.stringify({ error: "draft not found" }), {
-          status: 404,
-        });
-      }
-      ticket = await prisma.relayTicket.findUnique({
-        where: { id: draft.ticketId },
-      });
-      if (!ticket) {
-        return new Response(JSON.stringify({ error: "ticket not found" }), {
-          status: 404,
-        });
-      }
+      if (!draft)  return new Response(JSON.stringify({ error: "draft not found" }),  { status: 404 });
+      ticket = await prisma.relayTicket.findUnique({ where: { id: draft.ticketId } });
+      if (!ticket) return new Response(JSON.stringify({ error: "ticket not found" }), { status: 404 });
     } else {
-      return new Response(JSON.stringify({ error: "ticketId required" }), {
-        status: 400,
-      });
+      return new Response(JSON.stringify({ error: "ticketId required" }), { status: 400 });
     }
 
-    // Determine the text to send: prefer explicit draftText, else latest draft for the ticket
+    // If no explicit draft given, use latest for this ticket
     if (!draft) {
       draft = await prisma.providerDraft.findFirst({
         where: { ticketId: ticket.id },
         orderBy: { createdAt: "desc" },
       });
     }
-    const finalText = String(body.draftText ?? draft?.draftText ?? "").trim();
+
+    // Pull edited text from multiple possible keys; fall back to DB draft
+    const editedFromRequest =
+      coalesce<string>(
+        body.draftText,
+        body.text,
+        body.finalText,
+        body.message,
+        url.searchParams.get("draftText"),
+        url.searchParams.get("text"),
+        url.searchParams.get("finalText"),
+        url.searchParams.get("message"),
+      ) ?? null;
+
+    const finalText = String(editedFromRequest ?? draft?.draftText ?? "").trim();
     if (!finalText) {
-      return new Response(JSON.stringify({ error: "no draft text" }), {
-        status: 400,
+      return new Response(JSON.stringify({ error: "no draft text" }), { status: 400 });
+    }
+
+    // If provider supplied an edit, persist it back to the draft record
+    if (draft && editedFromRequest !== null && finalText !== (draft.draftText ?? "").trim()) {
+      await prisma.providerDraft.update({
+        where: { id: draft.id },
+        data: { draftText: finalText, lastEditedAt: new Date() },
       });
     }
 
-    // Try to replace the existing placeholder message
-    const placeholder = await prisma.chatMessage.findFirst({
-      where: {
-        relayTicketId: ticket.id,
-        oversight: OversightStatus.AWAITING_PROVIDER,
-      },
+    // Replace ALL placeholders for this ticket (handles any duplicates)
+    const placeholders = await prisma.chatMessage.findMany({
+      where: { relayTicketId: ticket.id, oversight: OversightStatus.AWAITING_PROVIDER },
       orderBy: { createdAt: "asc" },
+      select: { id: true, sessionId: true, meta: true },
     });
 
+    let messageId: number | null = null;
     let sessionId: number | null = null;
-    let messageId: number;
 
-    if (placeholder) {
-      const updated = await prisma.chatMessage.update({
-        where: { id: placeholder.id },
-        data: {
-          role: MessageRole.PROVIDER,
-          content: finalText,
-          oversight: OversightStatus.APPROVED,
-          meta: {
-            ...(placeholder.meta as any),
-            approvedAt: new Date(),
-            approvedTicketId: ticket.id,
+    if (placeholders.length) {
+      for (const ph of placeholders) {
+        const updated = await prisma.chatMessage.update({
+          where: { id: ph.id },
+          data: {
+            role: MessageRole.PROVIDER,
+            content: finalText,
+            oversight: OversightStatus.APPROVED,
+            meta: { ...(ph.meta as any), approvedAt: new Date(), approvedTicketId: ticket.id },
           },
-        },
-      });
-      messageId = updated.id;
-      sessionId = updated.sessionId as unknown as number;
+        });
+        messageId = updated.id;                // last updated id
+        sessionId = updated.sessionId as any;  // consistent session
+      }
     } else {
-      // Fallback to a session captured in the ticket snapshot or latest session for the mother
-      const snap = (ticket.summarySnapshot as any) || {};
+      // No placeholder -> inject a new provider message
+      const snap: any = ticket.summarySnapshot || {};
       sessionId =
         snap.sessionId ??
         (
@@ -123,10 +114,7 @@ export async function POST(req: Request) {
         null;
 
       if (!sessionId) {
-        return new Response(
-          JSON.stringify({ error: "no session to deliver message" }),
-          { status: 409 }
-        );
+        return new Response(JSON.stringify({ error: "no session to deliver message" }), { status: 409 });
       }
 
       const created = await prisma.chatMessage.create({
@@ -142,13 +130,12 @@ export async function POST(req: Request) {
       messageId = created.id;
     }
 
-    // Mark the ticket answered (uses your enum)
+    // Mark ticket answered and mark draft approved
     await prisma.relayTicket.update({
       where: { id: ticket.id },
       data: { status: TicketStatus.ANSWERED },
     });
 
-    // Mark the exact draft as approved if we know it
     if (draft && !draft.approved) {
       await prisma.providerDraft.update({
         where: { id: draft.id },
@@ -156,7 +143,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // Keep a row in ProviderReply for audit
+    // Audit
     await prisma.providerReply
       .create({
         data: {
@@ -167,15 +154,15 @@ export async function POST(req: Request) {
       })
       .catch(() => {});
 
-    return new Response(
-      JSON.stringify({ ok: true, messageId, sessionId }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ ok: true, messageId, sessionId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   } catch (e: any) {
     console.error("approve error", e);
-    return new Response(
-      JSON.stringify({ error: e?.message || "server error" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: e?.message || "server error" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
