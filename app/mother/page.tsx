@@ -41,6 +41,13 @@ type Msg = {
 export default function MotherPage() {
   const params = useSearchParams();
 
+  // --- motherId from URL (used in ALL requests)
+  const motherId = useMemo(() => {
+    const raw = params.get("motherId");
+    const n = Number(raw);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }, [params]);
+
   // UI state
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [mode, setMode] = useState<ChatMode>("GENERAL");
@@ -130,10 +137,16 @@ export default function MotherPage() {
     };
   }
 
+  // helper: build querystring with motherId
+  const withMotherId = (qs: URLSearchParams) => {
+    if (motherId) qs.set("motherId", String(motherId));
+    return qs;
+  };
+
   async function load(opts?: { sessionId?: number; dateYMD?: string; forceMode?: ChatMode }) {
     try {
       setLoading(true);
-      const qs = new URLSearchParams();
+      const qs = withMotherId(new URLSearchParams());
       qs.set("date", opts?.dateYMD || date);
       if (opts?.sessionId) qs.set("sessionId", String(opts.sessionId));
       if (opts?.forceMode) qs.set("mode", String(opts?.forceMode));
@@ -174,7 +187,7 @@ export default function MotherPage() {
     const res = await fetch("/api/mia", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date, mode: nextMode, newChat: true, createOnly: true }),
+      body: JSON.stringify({ motherId, date, mode: nextMode, newChat: true, createOnly: true }),
     });
     const json = await res.json();
     const sess: Session = json.session;
@@ -206,14 +219,14 @@ export default function MotherPage() {
     const res = await fetch("/api/mia/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
+      body: JSON.stringify({ motherId, date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
     });
 
     if (!res.body) {
       const r = await fetch("/api/mia", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
+        body: JSON.stringify({ motherId, date, mode: nextMode, text: "", sessionId: targetSessionId, additionalContext }),
       });
       const json = await r.json();
       setSession(json.session);
@@ -256,7 +269,7 @@ export default function MotherPage() {
             )
           );
         } else if (evt.type === "final") {
-          const qs = new URLSearchParams();
+          const qs = withMotherId(new URLSearchParams());
           const sid = evt.sessionId || targetSessionId;
           if (sid) qs.set("sessionId", String(sid));
           const r = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
@@ -302,6 +315,7 @@ export default function MotherPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          motherId,
           date,
           mode,
           text,
@@ -316,6 +330,7 @@ export default function MotherPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            motherId,
             date,
             mode,
             text,
@@ -378,7 +393,7 @@ export default function MotherPage() {
               )
             );
           } else if (evt.type === "final") {
-            const qs = new URLSearchParams();
+            const qs = withMotherId(new URLSearchParams());
             const sid = evt.sessionId || session?.id;
             if (sid) qs.set("sessionId", String(sid));
             const r = await fetch(`/api/mia?${qs.toString()}`, { cache: "no-store" });
@@ -397,29 +412,29 @@ export default function MotherPage() {
   }
 
   // New chat button → create empty session (no auto-greeting)
-async function startNewChat() {
-  setSending(true);
-  try {
-    const res = await fetch("/api/mia", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        date,
-        mode,
-        newChat: true,
-        createOnly: true,
-      }),
-    });
-    const json = await res.json();
-    setSession(json.session);
-    setMessages(json.messages || []);
-    setInput("");
-  } finally {
-    setSending(false);
-    requestAnimationFrame(() => inputRef.current?.focus());
+  async function startNewChat() {
+    setSending(true);
+    try {
+      const res = await fetch("/api/mia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motherId,
+          date,
+          mode,
+          newChat: true,
+          createOnly: true,
+        }),
+      });
+      const json = await res.json();
+      setSession(json.session);
+      setMessages(json.messages || []);
+      setInput("");
+    } finally {
+      setSending(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
   }
-}
-
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -454,7 +469,7 @@ async function startNewChat() {
     const base = {
       type: surveyOpen as SurveyMode,
       date,
-      motherId: session?.motherId ?? null,
+      motherId: session?.motherId ?? motherId ?? null,
       sessionId: session?.id ?? null,
     };
 
@@ -656,7 +671,7 @@ async function startNewChat() {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Link
-              href="/mother/history"
+              href={`/mother/history${motherId ? `?motherId=${motherId}` : ""}`}
               className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-white/80 px-3 py-1.5 text-xs text-neutral-800 hover:bg-white"
             >
               <HistoryIcon className="h-4 w-4" />
@@ -843,7 +858,10 @@ async function startNewChat() {
             </div>
             <div className="flex items-center gap-1">
               <span className="hidden sm:inline">Go to</span>
-              <Link href="/mother/history" className="inline-flex items-center gap-1 text-neutral-800 hover:text-neutral-900">
+              <Link
+                href={`/mother/history${motherId ? `?motherId=${motherId}` : ""}`}
+                className="inline-flex items-center gap-1 text-neutral-800 hover:text-neutral-900"
+              >
                 <HistoryIcon className="h-3.5 w-3.5" />
                 History
               </Link>

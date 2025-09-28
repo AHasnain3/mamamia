@@ -5,63 +5,49 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { localDayToUTC } from "@/lib/time";
 import { runMiaResponse } from "@/lib/cedar";
-import { getSystemForMode } from "@/lib/miaSystem"; // keep if you've added mode-specific system prompts
+import { getSystemForMode } from "@/lib/miaSystem"; // ok if you have it; we guard its use below
 
-// Pick a mother (header/query/env fallback, else first, else create demo)
-async function getMother(req) {
-  const url = new URL(req.url);
-  const idParam = url.searchParams.get("motherId") || req.headers.get("x-mother-id");
-  const envId = process.env.DEMO_MOTHER_ID ? parseInt(process.env.DEMO_MOTHER_ID, 10) : undefined;
-  const id = Number.isFinite(Number(idParam)) ? Number(idParam) : envId;
+function toInt(v) {
+  const n = Number(v);
+  return Number.isInteger(n) ? n : null;
+}
 
-  if (id) {
-    const found = await prisma.motherProfile.findUnique({ where: { id } });
-    if (found) return found;
-  }
-  const first = await prisma.motherProfile.findFirst();
-  if (first) return first;
-
-  return prisma.motherProfile.create({
-    data: {
-      preferredName: "Demo Mom",
-      deliveryType: "VAGINAL",
-      deliveryDate: new Date(),
-      contactMethods: { email: "demo@example.com" },
-      tz: "America/New_York",
-      ppdStage: "UNDIAGNOSED",
-    },
+async function loadMotherStrict(id) {
+  return prisma.motherProfile.findUnique({
+    where: { id },
+    select: { id: true, tz: true, ppdStage: true, preferredName: true },
   });
 }
 
-async function getOrCreateSession({ mother, dateYMD, mode, newChat }) {
-  const dateUTC = localDayToUTC(dateYMD, mother.tz || "America/New_York");
+async function getOrCreateSessionStrict({ motherId, tz, dateYMD, mode, newChat }) {
+  const dateUTC = localDayToUTC(dateYMD, tz || "America/New_York");
+  const desiredMode = String(mode || "GENERAL").toUpperCase();
 
   if (newChat) {
     const last = await prisma.chatSession.findFirst({
-      where: { motherId: mother.id, date: dateUTC },
+      where: { motherId, date: dateUTC },
       orderBy: { seqInDay: "desc" },
       select: { seqInDay: true },
     });
     const seq = (last?.seqInDay ?? 0) + 1;
     return prisma.chatSession.create({
-      data: { motherId: mother.id, date: dateUTC, seqInDay: seq, mode: (mode || "GENERAL").toUpperCase() },
+      data: { motherId, date: dateUTC, seqInDay: seq, mode: desiredMode },
     });
   }
 
   let sess = await prisma.chatSession.findFirst({
-    where: { motherId: mother.id, date: dateUTC },
+    where: { motherId, date: dateUTC },
     orderBy: { seqInDay: "desc" },
   });
 
   if (!sess) {
     sess = await prisma.chatSession.create({
-      data: { motherId: mother.id, date: dateUTC, seqInDay: 1, mode: (mode || "GENERAL").toUpperCase() },
+      data: { motherId, date: dateUTC, seqInDay: 1, mode: desiredMode },
     });
   }
 
-  const desired = (mode || sess.mode).toUpperCase();
-  if (desired !== sess.mode) {
-    sess = await prisma.chatSession.update({ where: { id: sess.id }, data: { mode: desired } });
+  if (desiredMode !== sess.mode) {
+    sess = await prisma.chatSession.update({ where: { id: sess.id }, data: { mode: desiredMode } });
   }
   return sess;
 }
@@ -69,18 +55,40 @@ async function getOrCreateSession({ mother, dateYMD, mode, newChat }) {
 // --- GET: load current session + messages (for the day) ---
 export async function GET(req) {
   try {
-    const mother = await getMother(req);
     const url = new URL(req.url);
+    const motherId = toInt(url.searchParams.get("motherId"));
+    if (motherId === null) {
+      return NextResponse.json({ error: "Missing or invalid motherId" }, { status: 400 });
+    }
+
+    const mother = await loadMotherStrict(motherId);
+    if (!mother) return NextResponse.json({ error: "Mother not found" }, { status: 404 });
+
     const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
-    const sessionId = url.searchParams.get("sessionId");
+    const sessionIdRaw = url.searchParams.get("sessionId");
     const mode = url.searchParams.get("mode") || undefined;
 
     let session;
-    if (sessionId) {
-      session = await prisma.chatSession.findUnique({ where: { id: Number(sessionId) } });
+    if (sessionIdRaw) {
+      const sid = toInt(sessionIdRaw);
+      if (sid === null) return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 });
+
+      session = await prisma.chatSession.findUnique({ where: { id: sid } });
       if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      if (session.motherId !== mother.id) {
+        return NextResponse.json({ error: "Session does not belong to mother" }, { status: 403 });
+      }
+      if (mode && mode !== session.mode) {
+        session = await prisma.chatSession.update({ where: { id: session.id }, data: { mode: String(mode).toUpperCase() } });
+      }
     } else {
-      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: false });
+      session = await getOrCreateSessionStrict({
+        motherId: mother.id,
+        tz: mother.tz,
+        dateYMD: date,
+        mode,
+        newChat: false,
+      });
     }
 
     const messages = await prisma.chatMessage.findMany({
@@ -98,25 +106,34 @@ export async function GET(req) {
 // --- POST: send a message OR create a new chat (createOnly) ---
 export async function POST(req) {
   try {
-    const mother = await getMother(req);
     const body = await req.json();
 
+    const motherId = toInt(body.motherId);
+    if (motherId === null) {
+      return NextResponse.json({ error: "Missing or invalid motherId" }, { status: 400 });
+    }
+
+    const mother = await loadMotherStrict(motherId);
+    if (!mother) return NextResponse.json({ error: "Mother not found" }, { status: 404 });
+
     const date = body.date || new Date().toISOString().slice(0, 10);
-    const mode = String(body.mode || "GENERAL").toUpperCase(); // "GENERAL" | "MOOD" | "BONDING" | "HEALTH"
+    const mode = String(body.mode || "GENERAL").toUpperCase();
     const text = typeof body.text === "string" ? body.text.trim() : "";
-    const newChat = Boolean(body.newChat);           // force a brand new session (increments seqInDay)
-    const createOnly = Boolean(body.createOnly);     // create a session, no message/LLM
-    const sessionId = body.sessionId;
+    const newChat = Boolean(body.newChat);
+    const createOnly = Boolean(body.createOnly);
+    const sessionId = toInt(body.sessionId);
 
-    // Optional survey context
-    const {
-      exercise, eating, sleep, mentalScore,
-      babyContentScore, timeWithBabyMin,
-    } = body;
+    const { exercise, eating, sleep, mentalScore, babyContentScore, timeWithBabyMin } = body;
 
-    // 1) Create-only flow (for button taps / after survey)
+    // Create-only: make a new session, return it (no LLM)
     if (createOnly) {
-      const session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: true });
+      const session = await getOrCreateSessionStrict({
+        motherId: mother.id,
+        tz: mother.tz,
+        dateYMD: date,
+        mode,
+        newChat: true,
+      });
       const messages = await prisma.chatMessage.findMany({
         where: { sessionId: session.id },
         orderBy: { createdAt: "asc" },
@@ -124,24 +141,38 @@ export async function POST(req) {
       return NextResponse.json({ session, messages });
     }
 
-    // 2) Message-sending flow
+    // Send message flow
     if (!text) return NextResponse.json({ error: "Empty text" }, { status: 400 });
 
     let session;
     if (newChat) {
-      // ignore any passed sessionId and force a new one
-      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: true });
-    } else if (sessionId) {
-      session = await prisma.chatSession.findUnique({ where: { id: Number(sessionId) } });
+      session = await getOrCreateSessionStrict({
+        motherId: mother.id,
+        tz: mother.tz,
+        dateYMD: date,
+        mode,
+        newChat: true,
+      });
+    } else if (sessionId !== null) {
+      session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
       if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      if (session.motherId !== mother.id) {
+        return NextResponse.json({ error: "Session does not belong to mother" }, { status: 403 });
+      }
       if (mode && mode !== session.mode) {
         session = await prisma.chatSession.update({ where: { id: session.id }, data: { mode } });
       }
     } else {
-      session = await getOrCreateSession({ mother, dateYMD: date, mode, newChat: false });
+      session = await getOrCreateSessionStrict({
+        motherId: mother.id,
+        tz: mother.tz,
+        dateYMD: date,
+        mode,
+        newChat: false,
+      });
     }
 
-    // Store the mother's message
+    // Store mother's message
     await prisma.chatMessage.create({
       data: {
         sessionId: session.id,
@@ -152,10 +183,11 @@ export async function POST(req) {
       },
     });
 
-    // Mode-specific system prompt (if you added getSystemForMode)
-    const system = getSystemForMode
-      ? getSystemForMode(mode, { exercise, eating, sleep, mentalScore, babyContentScore, timeWithBabyMin })
-      : undefined;
+    // Optional mode-specific system prompt
+    const system =
+      typeof getSystemForMode === "function"
+        ? getSystemForMode(mode, { exercise, eating, sleep, mentalScore, babyContentScore, timeWithBabyMin })
+        : undefined;
 
     // Generate Mia reply
     const mia = await runMiaResponse({
@@ -163,7 +195,7 @@ export async function POST(req) {
       stage: mother.ppdStage,
       motherName: mother.preferredName,
       userText: text,
-      system, // used if your lib/cedar.js patch accepts 'system'
+      system,
     });
 
     if (mia.needsProviderReview) {
@@ -185,7 +217,7 @@ export async function POST(req) {
         },
       });
 
-      // hidden draft (for audit trail)
+      // hidden draft (audit)
       await prisma.chatMessage.create({
         data: {
           sessionId: session.id,
@@ -197,7 +229,7 @@ export async function POST(req) {
         },
       });
 
-      // visible placeholder (attach ticket id so provider approval can replace it)
+      // visible placeholder
       const placeholder = await prisma.chatMessage.create({
         data: {
           sessionId: session.id,
