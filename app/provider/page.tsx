@@ -155,8 +155,11 @@ export default async function ProviderPage({ searchParams }: PageProps) {
   const hasSelection = !!selectedId;
 
   return (
-    <main className="h-dvh relative isolate grid grid-rows-[auto_2fr_1fr] font-sans tracking-tight">
-      {/* Pastel blue canvas + soft radial */}
+      <main
+          key={selectedId ?? "none"} // ← force a fresh mount per mother selection
+          className="h-dvh relative isolate grid grid-rows-[auto_2fr_1fr] font-sans tracking-tight"
+        >
+          {/* Pastel blue canvas + soft radial */}
       <div className="absolute inset-0 -z-20 bg-sky-200" />
       <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(1100px_520px_at_50%_-10%,rgba(199,210,254,0.65),rgba(255,255,255,0.6)_35%,transparent_70%)]" />
 
