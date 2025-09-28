@@ -1,12 +1,15 @@
 // app/page.tsx
 import Link from "next/link";
+import Image from "next/image";
 import { Users, Smile } from "lucide-react";
 import { prisma } from "@/lib/prisma"; // server-side
-import MotherChooser from "./_components/MotherChooser";
+import MotherChooser from "./_components/MotherChooser"; // client component
+
+export type MotherLite = { id: number; preferredName: string | null; photoUrl: string | null };
 
 export default async function Home() {
   // Fetch all mothers for the chooser
-  const mothers = await prisma.motherProfile.findMany({
+  const mothers: MotherLite[] = await prisma.motherProfile.findMany({
     orderBy: { updatedAt: "desc" },
     select: { id: true, preferredName: true, photoUrl: true },
   });
@@ -15,10 +18,10 @@ export default async function Home() {
   const providerHref = firstRecent ? `/provider?motherId=${firstRecent.id}` : "/provider";
 
   const cardBase =
-    "rounded-2xl border p-8 text-center shadow-sm transition focus:outline-none " +
-    "focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950";
+    // NOTE: add "h-full block" so the card fills the grid cell height
+    "block h-full rounded-2xl border p-8 text-center shadow-sm transition focus:outline-none " +
+    "focus-visible:ring-2 focus-visible:ring-rose-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950";
 
-  const cardSize = "h-full min-h-[260px]"; // keep cards same height
   const hasMultipleMothers = mothers.length > 1;
 
   return (
@@ -26,7 +29,7 @@ export default async function Home() {
       {/* dark canvas */}
       <div className="absolute inset-0 -z-20 bg-neutral-950" />
       {/* brighter pink glow */}
-      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(2000px_1000px_at_50%_-25%,rgba(244,114,182,0.5),transparent_70%)]" />
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(2000px_1000px_at_50%_-25%,rgba(244,114,182,0.55),transparent_70%)]" />
 
       <div className="w-full max-w-3xl">
         <header className="mb-10 text-center">
@@ -38,64 +41,64 @@ export default async function Home() {
           </p>
         </header>
 
-        <div className="grid gap-6 sm:grid-cols-2 items-stretch">
-          {/* Mother (warm tint) */}
+        <div className="grid gap-6 sm:grid-cols-2">
+          {/* Mother (brighter) */}
           {hasMultipleMothers ? (
             <MotherChooser mothers={mothers}>
               <div
                 className={[
                   cardBase,
-                  cardSize,
-                  "cursor-pointer border-white/15 bg-gradient-to-br from-rose-900/25 via-orange-900/15 to-rose-900/15",
-                  "hover:from-rose-900/35 hover:via-orange-900/20 hover:to-rose-900/20",
-                  "hover:shadow-[0_14px_40px_-12px_rgba(255,186,150,0.3)]",
+                  // brighter warm gradient
+                  "cursor-pointer border-white/20 bg-gradient-to-br from-rose-500/45 via-orange-400/25 to-rose-500/25",
+                  "hover:from-rose-500/60 hover:via-orange-400/35 hover:to-rose-500/40",
+                  "hover:shadow-[0_16px_44px_-12px_rgba(255,160,170,0.45)]",
                 ].join(" ")}
               >
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-400/20 border border-rose-300/30">
-                  <Smile className="h-6 w-6 text-rose-200" aria-hidden />
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-400/40 border border-rose-300/40">
+                  <Smile className="h-6 w-6 text-rose-100" aria-hidden />
                 </div>
                 <h2 className="text-2xl font-semibold text-neutral-50">I’m a Mother</h2>
-                <p className="mt-2 text-sm text-neutral-300">Choose your profile</p>
+                <p className="mt-2 text-sm text-neutral-200">Choose your profile</p>
               </div>
             </MotherChooser>
           ) : (
             <Link
               href={"/mother" + (firstRecent ? `?motherId=${firstRecent.id}` : "")}
               className={[
+                // make Link block + full height to match
                 cardBase,
-                cardSize,
-                "border-white/15 bg-gradient-to-br from-rose-900/25 via-orange-900/15 to-rose-900/15",
-                "hover:from-rose-900/35 hover:via-orange-900/20 hover:to-rose-900/20",
-                "hover:shadow-[0_14px_40px_-12px_rgba(255,186,150,0.3)]",
+                "border-white/20 bg-gradient-to-br from-rose-500/45 via-orange-400/25 to-rose-500/25",
+                "hover:from-rose-500/60 hover:via-orange-400/35 hover:to-rose-500/40",
+                "hover:shadow-[0_16px_44px_-12px_rgba(255,160,170,0.45)]",
               ].join(" ")}
             >
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-400/20 border border-rose-300/30">
-                <Smile className="h-6 w-6 text-rose-200" aria-hidden />
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-400/40 border border-rose-300/40">
+                <Smile className="h-6 w-6 text-rose-100" aria-hidden />
               </div>
               <h2 className="text-2xl font-semibold text-neutral-50">I’m a Mother</h2>
-              <p className="mt-2 text-sm text-neutral-300">Mood, sleep, and gentle guidance</p>
+              <p className="mt-2 text-sm text-neutral-200">Mood, sleep, and gentle guidance</p>
             </Link>
           )}
 
-          {/* Provider (cool tint) */}
+          {/* Provider (brighter) */}
           <Link
             href={providerHref}
             className={[
+              // block + h-full for parity
               cardBase,
-              cardSize,
-              "border-white/15 bg-gradient-to-br from-sky-900/20 via-indigo-900/12 to-sky-900/12",
-              "hover:from-sky-900/30 hover:via-indigo-900/18 hover:to-sky-900/18",
-              "hover:shadow-[0_14px_40px_-12px_rgba(147,197,253,0.3)]",
+              "border-white/20 bg-gradient-to-br from-sky-500/40 via-indigo-500/22 to-sky-500/22",
+              "hover:from-sky-500/55 hover:via-indigo-500/32 hover:to-sky-500/32",
+              "hover:shadow-[0_16px_44px_-12px_rgba(147,197,253,0.45)]",
             ].join(" ")}
           >
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-sky-400/20 border border-sky-300/30">
-              <Users className="h-6 w-6 text-sky-200" aria-hidden />
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-sky-400/35 border border-sky-300/40">
+              <Users className="h-6 w-6 text-sky-100" aria-hidden />
             </div>
             <h2 className="text-2xl font-semibold text-neutral-50">I’m a Provider</h2>
-            <p className="mt-2 text-sm text-neutral-300">
+            <p className="mt-2 text-sm text-neutral-200">
               Monitor patients, review questions &amp; approve replies
             </p>
-            <p className="mt-4 text-xs text-neutral-400">
+            <p className="mt-4 text-xs text-neutral-300">
               {firstRecent ? "Opens with your most recent patient" : "Opens Provider Console"}
             </p>
           </Link>
