@@ -15,6 +15,7 @@
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-tabs": "^1.1.13",
     "@tiptap/react": "^3.6.1",
+    "bcryptjs": "^3.0.2",
     "cedar-os": "^0.1.21",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
@@ -24,9 +25,11 @@
     "motion": "^12.23.22",
     "motion-plus-react": "^1.5.4",
     "next": "15.5.4",
+    "openai": "^5.23.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "uuid": "^13.0.0"
   },
@@ -40,6 +43,7 @@
     "eslint-config-next": "15.5.4",
     "prisma": "^6.16.2",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

@@ -82,6 +82,8 @@ model MotherProfile {
   // NEW (for avatar on Provider page)
   photoUrl String? // e.g. "/patients/ali.jpg"
 
+  passwordHash String?
+
   checkIns     CheckIn[]
   careContacts CareContact[]
   relayTickets RelayTicket[]
@@ -156,7 +158,7 @@ model ProviderDraft {
   ticketId     Int
   draftText    String
   modelMeta    Json
-  approved  Boolean @default(false)  // ✅ must exist
+  approved     Boolean  @default(false) // ✅ must exist
   lastEditedAt DateTime @default(now())
   createdAt    DateTime @default(now())
 
